@@ -28,7 +28,7 @@
     "debug": "4.4.1",
     "miningos-lib-stats": "git+https://github.com/tetherto/miningos-lib-stats.git",
     "miningos-tpl-wrk-miner": "git+https://github.com/tetherto/miningos-tpl-wrk-miner.git",
-    "svc-facs-tcp": "git+https://github.com/tetherto/svc-facs-tcp"
+    "svc-facs-tcp": "git+https://github.com/tetherto/svc-facs-tcp.git"
   },
   "devDependencies": {
     "@bitfinex/lib-js-util-base": "git+https://github.com/bitfinexcom/lib-js-util-base.git",

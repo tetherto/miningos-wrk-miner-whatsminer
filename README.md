@@ -1,6 +1,6 @@
 # miningos-wrk-miner-whatsminer
 
-A Node.js-based worker service for managing and monitoring Whatsminer Bitcoin mining devices. This implementation provides comprehensive control over Whatsminer miners, including the models m30sp, m30spp, m53s, m56s, and, m63, with support for monitoring, configuration, and remote management.
+A worker service for managing and monitoring Whatsminer Bitcoin mining devices. This implementation provides comprehensive control over Whatsminer miners, including the models m30sp, m30spp, m53s, m56s, and, m63, with support for monitoring, configuration, and remote management.
 
 ## Table of Contents
 
@@ -16,16 +16,15 @@ A Node.js-based worker service for managing and monitoring Whatsminer Bitcoin mi
 10. [Protocol Details](#protocol-details)
 11. [Mock Server](#mock-server)
 12. [Development](#development)
-13. [Firmware Updates](#firmware-updates)
-14. [Troubleshooting](#troubleshooting)
+13. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
-The Whatsminer worker extends the abstract miner worker framework to provide specific functionality for Whatsminer mining hardware. It implements an encrypted JSON-RPC protocol over TCP for secure device communication and offers advanced power management and monitoring features.
+The Whatsminer worker extends the abstract miner worker framework to provide specific functionality for Whatsminer mining hardware. It implements an encrypted TCP connection for secure device communication and offers advanced power management and monitoring features.
 
 ## Object Model
 
-The following is a fragment of [MiningOS object model](https://docs.mos.tether.io/) that contains the concrete classes representing  **Whatsminer miner workers** (highlighted in blue), one generically representing any model of the brand, and four children specifically representing models **M30SP**, **M30SPP**, **M53S**, **M56S**, and **M63**. The rounded nodes reprsent abstract classes while the square nodes represent concrete classes:
+The following is a fragment of [MiningOS object model](https://docs.mos.tether.io/) that contains the concrete classes representing  **Whatsminer miner workers** (highlighted in blue), one generically representing any model of the brand, and  child classes specifically representing models **M30SP**, **M30SPP**, **M53S**, **M56S**, and **M63**. The rounded nodes reprsent abstract classes while the square nodes represent concrete classes:
 
 ```mermaid
 ---
@@ -81,29 +80,25 @@ flowchart RL
     style miningos-wrk-miner-whatsminer-M63 fill:#005,stroke-width:4px
 ```
 
-> Accordign to UML notation, abstract classes have their names in Italic. 'Stadium shape' applied for abstract class nodes for better visualization.
-
-> Horizontal display was chosen over more conventional vertical one merely for purposes of better layout.
-
 Check out [miningos-tpl-wrk-miner](https://github.com/tetherto/miningos-tpl-wrk-miner/) for more information about parent classes.
 
 ## Supported Models
 
-- **M30SP**: Standard performance model
-- [**M30SPP**](https://whatsminer.net/product/m30s_plus_plus-110t-31w-ship-now/): Enhanced performance variant
-- [**M53S**](https://whatsminer.net/product/m53splus-302t-24w-liquid-cooled-ship-now/): High-efficiency model
-- [**M56S**](https://whatsminer.net/product/m56s-200th-26w-order-now/): Advanced efficiency model
-- **M63**: Latest generation miner
+- **M30SP**
+- **M30SPP**
+- **M53S**
+- **M56S**
+- **M63**
 
 ## Features
 
 ### Core Functionality
 - Device Management: Register, update, and remove Whatsminer devices
-- Secure Communication: AES-encrypted JSON-RPC protocol with token authentication
+- Secure Communication: AES-encrypted token authentication
 - Real-time Monitoring: Comprehensive metrics collection and status tracking
 - Pool Management: Configure and monitor up to 3 mining pools
 - Advanced Power Control: Low, normal, high, and sleep power modes
-- Network Configuration: DHCP and static IP support with DNS configuration
+- Network Configuration: DHCP and static IP support 
 
 ### Power Management
 - Power Modes: Sleep, low, normal, and high performance modes
@@ -123,7 +118,6 @@ Check out [miningos-tpl-wrk-miner](https://github.com/tetherto/miningos-tpl-wrk-
 - Pool Statistics: Accepted, rejected, stale shares per pool
 
 ### Advanced Features
-- Firmware Updates: Secure firmware upgrade support
 - Fast Boot: Enable/disable fast boot mode
 - Web Pool Management: Enable/disable web-based pool configuration
 - LED Control: Manual or automatic LED control
@@ -133,14 +127,6 @@ Check out [miningos-tpl-wrk-miner](https://github.com/tetherto/miningos-tpl-wrk-
 ## Requirements
 
 - Node.js (>= 20.0)
-- Network access to Whatsminer devices (default port: 4028)
-- Dependencies:
-  - `bfx-svc-boot-js`
-  - `miningos-tpl-wrk-miner`
-  - `svc-facs-tcp`
-  - `crypto-js`
-  - `async`
-  - `node:net`
 
 ## Installation
 
@@ -186,8 +172,6 @@ Check out [miningos-tpl-wrk-miner](https://github.com/tetherto/miningos-tpl-wrk-
 - M30SP/M30SPP: 33 W/TH/s (default)
 - M53S/M56S/M63: 26 W/TH/s (default)
 
-The `delay` parameter (50ms default) is not part of the configuration file but is set in the code.
-
 ### Alert Configuration
 
 Each model has specific alert configurations for various conditions:
@@ -205,10 +189,15 @@ See `config/base.thing.json.example` for complete alert definitions per model.
 ### Starting the Worker
 
 ```bash
-# For M56S model
 node worker.js --wtype wrk-miner-rack-m56s --env production --rack rack-1
 
-# For other models, replace m56s with: m30sp, m30spp, m53s, or m63
+node worker.js --wtype wrk-miner-rack-m53s --env production --rack rack-2
+
+node worker.js --wtype wrk-miner-rack-m30sp --env production --rack rack-3
+
+node worker.js --wtype wrk-miner-rack-m30spp --env production --rack rack-4
+
+node worker.js --wtype wrk-miner-rack-m63 --env production --rack rack-5
 ```
 
 ### Registering a Miner
@@ -281,24 +270,8 @@ Execute commands via the `queryThing` RPC method:
   "params": {
     "id": "miner-id",
     "method": "setPools",
-    "params": [[
-      {
-        "url": "stratum+tcp://pool1.example.com:3333",
-        "worker_name": "worker1",
-        "worker_password": "x"
-      },
-      {
-        "url": "stratum+tcp://pool2.example.com:3333",
-        "worker_name": "worker1",
-        "worker_password": "x"
-      },
-      {
-        "url": "stratum+tcp://pool3.example.com:3333",
-        "worker_name": "worker1",
-        "worker_password": "x"
-      }
-    ]]}
-  }
+    "params": []
+    }  
 }
 ```
 
@@ -332,9 +305,6 @@ Execute commands via the `queryThing` RPC method:
 
 // Factory reset
 { "method": "queryThing", "params": { "id": "miner-id", "method": "factoryReset", "params": [] }}
-
-// Update password
-{ "method": "queryThing", "params": { "id": "miner-id", "method": "updateAdminPassword", "params": ["newPassword"] }}
 
 // LED control
 { "method": "queryThing", "params": { "id": "miner-id", "method": "setLED", "params": [true] }}
@@ -398,6 +368,10 @@ A comprehensive mock server is provided for testing:
 
 ```bash
 DEBUG="*" node mock/server.js --type M56s -p 8080 -h 0.0.0.0
+DEBUG="*" node mock/server.js --type M53s -p 8080 -h 0.0.0.0
+DEBUG="*" node mock/server.js --type M30sp -p 8080 -h 0.0.0.0
+DEBUG="*" node mock/server.js --type M30spp -p 8080 -h 0.0.0.0
+DEBUG="*" node mock/server.js --type M63 -p 8080 -h 0.0.0.0
 ```
 
 The mock server simulates all Whatsminer commands and responses.
@@ -426,40 +400,3 @@ class WrkMinerRackNewModel extends WrkMinerRack {
 ```bash
 npm test
 ```
-
-## Firmware Updates
-
-The worker supports secure firmware updates:
-- Multi-platform firmware packages
-- Chip-specific firmware extraction
-- Encrypted upgrade protocol
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Authentication Failures**
-   - Verify admin password
-   - Check IP-based rate limiting
-   - Ensure token refresh logic
-
-2. **Connection Issues**
-   - Verify network connectivity
-   - Check firewall rules (port 4028)
-   - Confirm miner IP address
-
-3. **Command Failures**
-   - Some commands don't return responses (reboot, power mode changes)
-   - Wait for operations to complete before subsequent commands
-   - Check error codes in responses
-
-### Debug Mode
-
-Enable debug logging:
-```bash
-DEBUG=thing:proc,miner:*,firmware node worker.js
-```
-
-## Base Architecture
-
-https://github.com/tetherto/miningos-tpl-wrk-thing/blob/main/README.md
