@@ -1,7 +1,7 @@
 'use strict'
 
-const WMApiV2 = require('./v2-handler')
-const WMApiV3 = require('./v3-handler')
+const WMApiV2 = require('./wm-api-v2')
+const WMApiV3 = require('./wm-api-v3')
 const { API_VERSIONS, DEFAULT_API_VERSION, API_DEFAULTS } = require('./constants')
 
 const HANDLERS = {

@@ -1,7 +1,7 @@
 'use strict'
 
 const test = require('brittle')
-const WMApiBase = require('../../workers/lib/protocols/base-handler')
+const WMApiBase = require('../../workers/lib/protocols/wm-api-base')
 
 test('protocols/base-handler - cannot instantiate directly', (t) => {
   try {

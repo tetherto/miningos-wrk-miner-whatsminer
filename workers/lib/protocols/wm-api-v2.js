@@ -1,7 +1,7 @@
 'use strict'
 
 const CryptoJS = require('crypto-js')
-const WMApiBase = require('./base-handler')
+const WMApiBase = require('./wm-api-base')
 const md5 = require('../utils/md5')
 const hex2a = require('../utils/hex2a')
 const { API_VERSIONS, API_DEFAULTS, RESPONSE_CODES } = require('./constants')

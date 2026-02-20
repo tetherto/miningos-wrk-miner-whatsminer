@@ -1,7 +1,7 @@
 'use strict'
 
 const test = require('brittle')
-const WMApiV2 = require('../../workers/lib/protocols/v2-handler')
+const WMApiV2 = require('../../workers/lib/protocols/wm-api-v2')
 const { API_VERSIONS } = require('../../workers/lib/protocols/constants')
 
 // Mock RPC for testing
