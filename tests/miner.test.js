@@ -25,7 +25,8 @@ const miner = new Miner({
   address: conf.settings.host,
   port: conf.settings.port,
   password: conf.settings.password,
-  id: '001'
+  id: '001',
+  apiVersion: '2.0.5' // Explicitly set to V2 for testing
 })
 
 conf.cleanup = async () => {
@@ -43,6 +44,8 @@ conf.cleanup = async () => {
 
 const execute = async () => {
   try {
+    // Initialize miner with protocol handler
+    await miner.init()
     await testExecutor(miner, conf)
   } finally {
     // Ensure cleanup is called
