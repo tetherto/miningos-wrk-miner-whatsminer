@@ -7,6 +7,7 @@ const async = require('async')
 
 const DEFAULT_PORT = 4028
 const { DEFAULT_NOMINAL_EFFICIENCY_WTHS } = require('./constants')
+const { ApiHandlerFactory } = require('./protocols')
 
 class WrkMinerRack extends WrkRack {
   init () {
@@ -46,6 +47,13 @@ class WrkMinerRack extends WrkRack {
     return super.getMinerDefaultPort() || DEFAULT_PORT
   }
 
+  _getDefaultPortForVersion (apiVersion) {
+    if (apiVersion) {
+      return ApiHandlerFactory.getDefaultPort(apiVersion)
+    }
+    return DEFAULT_PORT
+  }
+
   getNominalEficiencyWThs () {
     return super.getNominalEficiencyWThs(DEFAULT_NOMINAL_EFFICIENCY_WTHS)
   }
@@ -59,8 +67,16 @@ class WrkMinerRack extends WrkRack {
       return 0
     }
 
+    // Determine API version: explicit opts > stored in info > auto-detect (null)
+    const apiVersion = thg.opts.apiVersion || thg.info?.apiVersion || null
+
+    // Use version-specific port if not explicitly provided
+    const port = thg.opts.port || this._getDefaultPortForVersion(apiVersion)
+
     const miner = new Miner({
       ...thg.opts,
+      port,
+      apiVersion,
       socketer: {
         readStrategy: TcpFacility.TCP_READ_STRATEGY.ON_END,
         rpc: (opts) => {
@@ -72,6 +88,17 @@ class WrkMinerRack extends WrkRack {
       nominalEfficiencyWThs: this.getNominalEficiencyWThs(),
       type: thg.type
     })
+
+    // Initialize the miner (performs version detection if needed)
+    await miner.init()
+
+    // Store detected version in thing.info for persistence
+    if (!thg.info) {
+      thg.info = {}
+    }
+    if (thg.info.apiVersion !== miner.apiVersion) {
+      thg.info.apiVersion = miner.apiVersion
+    }
 
     miner.on('error', e => {
       this.debugThingError(thg, e)

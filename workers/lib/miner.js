@@ -4,23 +4,23 @@ const BaseMiner = require('miningos-tpl-wrk-miner/workers/lib/base')
 const async = require('async')
 const net = require('node:net')
 const CryptoJS = require('crypto-js')
-const md5 = require('./utils/md5')
 const hex2a = require('./utils/hex2a')
 const readFirmware = require('./utils/firmware')
-const { getErrorMsg, getAPICodeMsg } = require('./utils')
+const { getErrorMsg } = require('./utils')
 const {
   MINOR_ERROR_CODES_M56S_M30_SET,
   MINOR_ERROR_CODES_M53_SET,
   MINER_COOLING_TYPE_MAP
 } = require('./constants')
 const { STATUS, POWER_MODE } = require('miningos-tpl-wrk-miner/workers/lib/constants')
+const { ApiHandlerFactory, API_VERSIONS } = require('./protocols')
 
 function isResOK (res) {
   return res?.Code === 131
 }
 
 class WhatsminerMiner extends BaseMiner {
-  constructor ({ socketer, ...opts }) {
+  constructor ({ socketer, apiVersion, ...opts }) {
     super(opts)
 
     this.rpc = socketer.rpc({
@@ -35,8 +35,71 @@ class WhatsminerMiner extends BaseMiner {
       delay: this.conf.delay || 50
     })
 
+    this.apiVersion = apiVersion || null
+    this.protocolHandler = null
     this._cachedPrevHashrate = null
     this.cachedShares = { accepted: 0, rejected: 0, stale: 0 }
+  }
+
+  /**
+   * Initializes the miner with API version detection if not provided
+   */
+  async init () {
+    if (!this.apiVersion) {
+      this.apiVersion = await this._detectApiVersion()
+    }
+
+    this.protocolHandler = ApiHandlerFactory.create(this.apiVersion, {
+      rpc: this.rpc,
+      password: this.opts.password,
+      debugError: this.debugError.bind(this)
+    })
+  }
+
+  /**
+   * Detects the API version by attempting to connect on known ports/commands
+   * @returns {Promise<string>}
+   */
+  async _detectApiVersion () {
+    // If port is explicitly provided, infer version from port
+    if (this.opts.port === 4433) {
+      return API_VERSIONS.V3
+    }
+    if (this.opts.port === 4028) {
+      return API_VERSIONS.V2
+    }
+
+    // Try V2 first (more common), then V3
+    const detectors = [
+      { version: API_VERSIONS.V2, cmd: 'get_token' },
+      { version: API_VERSIONS.V3, cmd: 'get.device.info' }
+    ]
+
+    for (const { version, cmd } of detectors) {
+      try {
+        const res = await this._tryCommand(cmd)
+        if (res && !res.error && res.Msg) {
+          return version
+        }
+      } catch (e) {
+        this.debugError(`Version detection failed for ${version}:`, e.message)
+      }
+    }
+
+    // Default to V2 if detection fails
+    this.debugError('API version detection failed, defaulting to V2')
+    return API_VERSIONS.V2
+  }
+
+  /**
+   * Tries a command for version detection
+   * @param {string} command
+   * @returns {Promise<Object>}
+   */
+  async _tryCommand (command) {
+    const cmd = { cmd: command }
+    const response = await this.rpc.request(JSON.stringify(cmd))
+    return JSON.parse(response)
   }
 
   async close () {
@@ -44,31 +107,32 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   async _getToken () {
-    const res = await this._requestReadEndpoint('get_token')
-
-    // check error code for the new firmware update v#20230911.12
-    if (res?.Code === 136) {
-      throw new Error('ERR_TOKEN_FETCH_IP_LIMIT')
-    }
-
-    const key = md5.crypt(this.opts.password, res.Msg.salt)
-    const arr = key.split('$')
-    const sign = md5.crypt(arr[arr.length - 1] + res.Msg.time, res.Msg.newsalt)
-    const tmp = sign.split('$')
-    const token = `${res.Msg.time},${res.Msg.newsalt},` + tmp[tmp.length - 1]
-    return {
-      token,
-      sign: tmp[tmp.length - 1],
-      key: arr[arr.length - 1]
-    }
+    return this.protocolHandler.authenticate()
   }
 
   async _refreshToken () {
     try {
-      this.token = await this._getToken()
+      await this.protocolHandler.refreshToken()
     } catch (e) {
       this.debugError('_refreshToken error', e)
       throw e
+    }
+  }
+
+  /**
+   * Gets the current token info from the protocol handler
+   * @returns {{token: string, sign: string, key: string}|undefined}
+   */
+  get token () {
+    return this.protocolHandler?.getTokenInfo()
+  }
+
+  /**
+   * Sets/clears the token (for backwards compatibility)
+   */
+  set token (value) {
+    if (value === undefined && this.protocolHandler) {
+      this.protocolHandler.clearToken()
     }
   }
 
@@ -111,86 +175,38 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   async _requestReadEndpoint (command, additionalParams = {}) {
-    const cmd = {
-      cmd: command,
-      ...additionalParams
-    }
-    this.debugError(`Sending command ${JSON.stringify(cmd)}`)
-    try {
-      const res = await this._requestMiner(cmd)
-      this.debugError(`Received response ${JSON.stringify(res)}`)
-      return res
-    } catch (error) {
-      this.debugError(error)
-      throw new Error('ERR_READ_FAILED')
-    }
-  }
+    const cmd = this.protocolHandler.transformCommand(command)
 
-  async _requestWriteEndpoint (command, additionalParams = {}, json = true) {
-    let retry = 0
-    let err = null
-
-    while (retry < 3) {
-      try {
-        if (this.token === undefined) {
-          await this._refreshToken()
-        }
-        const { sign, key } = this.token
-        const cmd = JSON.stringify({
-          token: sign,
-          cmd: command,
-          ...additionalParams
-        })
-        this.debugError(`Sending command ${cmd}`)
-        const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
-        const encCmd = {
-          enc: 1,
-          data
-        }
-
-        const res = await this._requestMiner(encCmd, json)
-
-        // cases when we only need to write to miner,and there is no response, for e.g: reboot
-        if (res.length === 0) {
-          return null
-        }
-        if (!res.enc) {
-          this.debugError(`Received response ${JSON.stringify(res)}`)
-          throw new Error(getAPICodeMsg(res))
-        }
-
-        const decrypted = CryptoJS.AES.decrypt(res.enc, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
-        const response = JSON.parse(hex2a(decrypted))
-        if (response.Code === 135) {
-          // Retry with fresh token
-          this.token = undefined
-          retry++
-          continue
-        }
-        this.debugError(`Received response ${JSON.stringify(response)}`)
-        return response
-      } catch (e) {
-        err = e
-        this.token = undefined
-        retry++
+    // For V3, certain commands need a param field (e.g., get.miner.status)
+    const params = { ...additionalParams }
+    if (this.protocolHandler.getStatusParam) {
+      const statusParam = this.protocolHandler.getStatusParam(command)
+      if (statusParam) {
+        params.param = statusParam
       }
     }
 
-    if (err) {
-      this.debugError('write_err', err)
-      throw err
-    }
-    return null
+    const res = await this.protocolHandler.requestRead(cmd, params)
+    return this.protocolHandler.parseResponse(res, command)
+  }
+
+  async _requestWriteEndpoint (command, additionalParams = {}, json = true) {
+    const cmd = this.protocolHandler.transformCommand(command)
+    const res = await this.protocolHandler.requestWrite(cmd, additionalParams, json)
+    return res ? this.protocolHandler.parseResponse(res, command) : null
   }
 
   async _requestWriteFirmwareEndpoint (filename) {
-    if (this.token === undefined) {
+    // Ensure we have a valid token
+    if (!this.token) {
       await this._refreshToken()
     }
-    const { sign, key } = this.token
+    const tokenInfo = this.protocolHandler.getTokenInfo()
+    const { sign, key } = tokenInfo
+    const firmwareCmd = this.protocolHandler.transformCommand('update_firmware')
     const cmd = JSON.stringify({
       token: sign,
-      cmd: 'update_firmware'
+      cmd: firmwareCmd
     })
     const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
     const encCmd = JSON.stringify({
@@ -227,7 +243,8 @@ class WhatsminerMiner extends BaseMiner {
       whatsminer: {
         api: res.Msg.api_ver,
         firmware: res.Msg.fw_ver
-      }
+      },
+      apiVersion: this.apiVersion
     }
   }
 
@@ -803,7 +820,8 @@ class WhatsminerMiner extends BaseMiner {
         power_mode: this._getPowerMode(data.stats),
         suspended: this._isSuspended(data.stats),
         led_status: data.miner_info.ledstat !== 'auto',
-        firmware_ver: data.version.whatsminer.firmware
+        firmware_ver: data.version.whatsminer.firmware,
+        api_version: this.apiVersion
       }
     }
   }
