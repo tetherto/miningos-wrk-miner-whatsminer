@@ -6,6 +6,7 @@ const path = require('path')
 const yargs = require('yargs/yargs')
 const { hideBin } = require('yargs/helpers')
 const debug = require('debug')('mock')
+const CryptoJS = require('crypto-js')
 const { decryptCommand, encryptResponse } = require('./utils')
 const MockControlAgent = require('./mock-control-agent')
 const { promiseSleep } = require('@bitfinex/lib-js-util-promise')
@@ -16,13 +17,32 @@ const MINER_TYPES = ['m63', 'm56s', 'm53s', 'm30sp', 'm30spp']
 const SALT = '5QAHiKMb'
 
 /**
- * Generates encryption key from password
+ * Generates encryption key from password (V2 - MD5 based)
  */
-const generateEncryptionKey = (password) => {
+const generateEncryptionKeyV2 = (password) => {
   if (!password) return ENCRYPTION_KEY
   const key = md5.crypt(password, SALT)
   const arr = key.split('$')
   return arr[arr.length - 1]
+}
+
+/**
+ * Generates encryption key from password (V3 - SHA256 based)
+ */
+const generateEncryptionKeyV3 = (password) => {
+  if (!password) return ENCRYPTION_KEY
+  // V3 uses SHA256(password + salt)
+  return CryptoJS.SHA256(password + SALT).toString()
+}
+
+/**
+ * Generates encryption key based on API version
+ */
+const generateEncryptionKey = (password, apiVersion) => {
+  if (apiVersion === 'v3') {
+    return generateEncryptionKeyV3(password)
+  }
+  return generateEncryptionKeyV2(password)
 }
 
 /**
@@ -105,6 +125,7 @@ if (require.main === module) {
     .option('error', { description: 'send errored response', type: 'boolean', default: false })
     .option('minerpoolMockPort', { type: 'number', description: 'minerpool mock port', default: 8000 })
     .option('minerpoolMockHost', { type: 'string', description: 'minerpool mock host', default: '127.0.0.1' })
+    .option('apiVersion', { description: 'API version (v2 or v3)', type: 'string', default: 'v2' })
     .parse()
 
   const things = argv.bulk ? JSON.parse(fs.readFileSync(argv.bulk)) : [argv]
@@ -112,13 +133,16 @@ if (require.main === module) {
   agent.init(runServer)
 } else {
   module.exports = {
-    createServer ({ port, host, type, serial, password }) {
-      return runServer({ port, host, type, serial, password })
+    createServer ({ port, host, type, serial, password, apiVersion }) {
+      return runServer({ port, host, type, serial, password, apiVersion })
     }
   }
 }
 
 function runServer (argv, ops = {}) {
+  const apiVersion = argv.apiVersion || 'v2'
+  const defaultPassword = apiVersion === 'v3' ? 'super' : 'admin'
+
   const CTX = {
     host: argv.host,
     port: argv.port,
@@ -128,12 +152,13 @@ function runServer (argv, ops = {}) {
     error: argv.error,
     minerpoolMockPort: argv.minerpoolMockPort,
     minerpoolMockHost: argv.minerpoolMockHost,
-    password: argv.password || 'admin'
+    password: argv.password || defaultPassword,
+    apiVersion
   }
 
   const STATE = {}
   const validTokens = new Set()
-  const encryptionKey = generateEncryptionKey(CTX.password)
+  const encryptionKey = generateEncryptionKey(CTX.password, CTX.apiVersion)
 
   // Add validTokens to CTX so commands can add tokens
   CTX.validTokens = validTokens
@@ -191,7 +216,22 @@ function runServer (argv, ops = {}) {
 
     // Find and execute command
     const command = cmd.cmd || cmd.command || null
-    const cmdPaths = [`./cmds/${command}`, `./cmds/${CTX.type}/${command}`]
+
+    // Build command paths based on API version
+    // For V3, first try cmds-v3/, then fall back to cmds/ (with underscore conversion)
+    let cmdPaths
+    if (CTX.apiVersion === 'v3') {
+      // Try V3 specific commands first, then fall back to V2 commands
+      const v2Command = command.replace(/\./g, '_') // Convert dot notation to underscore for fallback
+      cmdPaths = [
+        `./cmds-v3/${command}`,
+        `./cmds-v3/${CTX.type}/${command}`,
+        `./cmds/${v2Command}`,
+        `./cmds/${CTX.type}/${v2Command}`
+      ]
+    } else {
+      cmdPaths = [`./cmds/${command}`, `./cmds/${CTX.type}/${command}`]
+    }
     const cmdPath = findExistingPath(cmdPaths)
 
     if (!cmdPath) {

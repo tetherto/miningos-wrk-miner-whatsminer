@@ -60,12 +60,23 @@ function getHashrate () {
 
 const getRandomIP = () => [...crypto.randomBytes(4)].join('.')
 
+// V2 response format: {STATUS, When, Code, Msg, Description}
 function createSuccessResponse (msg = 'API command OK', description = '') {
   return { STATUS: 'S', When: +new Date(), Code: 131, Msg: msg, Description: description }
 }
 
 function createErrorResponse (code = 14, msg = 'Invalid command', description = '') {
   return { STATUS: 'E', When: +new Date(), Code: code, Msg: msg, Description: description }
+}
+
+// V3 response format: {code, when, msg, desc}
+// V3 codes: 0=Success, -1=Fail, -2=Invalid command, -4=No permission
+function createV3SuccessResponse (msg = {}, desc = '') {
+  return { code: 0, when: Math.floor(Date.now() / 1000), msg, desc }
+}
+
+function createV3ErrorResponse (code = -1, msg = 'Command failed', desc = '') {
+  return { code, when: Math.floor(Date.now() / 1000), msg, desc }
 }
 
 function validateArgs (args, req) {
@@ -384,10 +395,15 @@ function createMinerInfo (ctx, options = {}) {
   }
 }
 
-function createVersion (chip) {
+function createVersion (chip, apiVersion = '2.0.5') {
+  const fwVersions = {
+    '2.0.5': '20230714.15.Rel',
+    '3.0.3': '20250101.15.Rel'
+  }
+
   return {
-    api_ver: '2.0.5',
-    fw_ver: '20230714.15.Rel',
+    api_ver: apiVersion,
+    fw_ver: fwVersions[apiVersion] || fwVersions['2.0.5'],
     platform: 'H616',
     chip
   }
@@ -451,6 +467,8 @@ module.exports = {
   getRandomIP,
   createSuccessResponse,
   createErrorResponse,
+  createV3SuccessResponse,
+  createV3ErrorResponse,
   validateArgs,
   createPools,
   createDevdetails,
