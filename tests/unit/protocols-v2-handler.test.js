@@ -1,7 +1,7 @@
 'use strict'
 
 const test = require('brittle')
-const ApiV2Handler = require('../../workers/lib/protocols/v2-handler')
+const WMApiV2 = require('../../workers/lib/protocols/v2-handler')
 const { API_VERSIONS } = require('../../workers/lib/protocols/constants')
 
 // Mock RPC for testing
@@ -17,20 +17,16 @@ const createMockRpc = (responses) => {
 }
 
 test('protocols/v2-handler - static VERSION', (t) => {
-  t.is(ApiV2Handler.VERSION, API_VERSIONS.V2, 'VERSION should be 2.0.5')
-  t.is(ApiV2Handler.VERSION, '2.0.5', 'VERSION should match string')
+  t.is(WMApiV2.VERSION, API_VERSIONS.V2, 'VERSION should be 2.0.5')
+  t.is(WMApiV2.VERSION, '2.0.5', 'VERSION should match string')
 })
 
 test('protocols/v2-handler - static DEFAULT_PORT', (t) => {
-  t.is(ApiV2Handler.DEFAULT_PORT, 4028, 'DEFAULT_PORT should be 4028')
-})
-
-test('protocols/v2-handler - static DEFAULT_PASSWORD', (t) => {
-  t.is(ApiV2Handler.DEFAULT_PASSWORD, 'admin', 'DEFAULT_PASSWORD should be admin')
+  t.is(WMApiV2.DEFAULT_PORT, 4028, 'DEFAULT_PORT should be 4028')
 })
 
 test('protocols/v2-handler - constructor', (t) => {
-  const handler = new ApiV2Handler({
+  const handler = new WMApiV2({
     rpc: {},
     password: 'testpass'
   })
@@ -40,12 +36,12 @@ test('protocols/v2-handler - constructor', (t) => {
 })
 
 test('protocols/v2-handler - getAuthCommand', (t) => {
-  const handler = new ApiV2Handler({ rpc: {}, password: 'admin' })
+  const handler = new WMApiV2({ rpc: {}, password: 'admin' })
   t.is(handler.getAuthCommand(), 'get_token', 'should return get_token')
 })
 
 test('protocols/v2-handler - transformCommand returns unchanged', (t) => {
-  const handler = new ApiV2Handler({ rpc: {}, password: 'admin' })
+  const handler = new WMApiV2({ rpc: {}, password: 'admin' })
 
   const commands = [
     'get_token',
@@ -62,7 +58,7 @@ test('protocols/v2-handler - transformCommand returns unchanged', (t) => {
 })
 
 test('protocols/v2-handler - parseResponse returns unchanged', (t) => {
-  const handler = new ApiV2Handler({ rpc: {}, password: 'admin' })
+  const handler = new WMApiV2({ rpc: {}, password: 'admin' })
 
   const response = { Code: 131, Msg: { data: 'test' } }
   t.alike(handler.parseResponse(response, 'cmd'), response, 'should return response unchanged')
@@ -78,7 +74,7 @@ test('protocols/v2-handler - authenticate success', async (t) => {
     }
   }])
 
-  const handler = new ApiV2Handler({
+  const handler = new WMApiV2({
     rpc: mockRpc,
     password: 'admin'
   })
@@ -96,7 +92,7 @@ test('protocols/v2-handler - authenticate IP limit error', async (t) => {
     Code: 136
   }])
 
-  const handler = new ApiV2Handler({
+  const handler = new WMApiV2({
     rpc: mockRpc,
     password: 'admin'
   })
@@ -115,7 +111,7 @@ test('protocols/v2-handler - requestRead success', async (t) => {
     Msg: { api_ver: '2.0.5' }
   }])
 
-  const handler = new ApiV2Handler({
+  const handler = new WMApiV2({
     rpc: mockRpc,
     password: 'admin'
   })
@@ -135,7 +131,7 @@ test('protocols/v2-handler - requestRead with params', async (t) => {
     }
   }
 
-  const handler = new ApiV2Handler({
+  const handler = new WMApiV2({
     rpc: mockRpc,
     password: 'admin'
   })
@@ -152,7 +148,7 @@ test('protocols/v2-handler - requestRead error', async (t) => {
     }
   }
 
-  const handler = new ApiV2Handler({
+  const handler = new WMApiV2({
     rpc: mockRpc,
     password: 'admin'
   })
@@ -166,7 +162,7 @@ test('protocols/v2-handler - requestRead error', async (t) => {
 })
 
 test('protocols/v2-handler - getTokenInfo', (t) => {
-  const handler = new ApiV2Handler({ rpc: {}, password: 'admin' })
+  const handler = new WMApiV2({ rpc: {}, password: 'admin' })
 
   t.is(handler.getTokenInfo(), undefined, 'should return undefined when no token')
 
@@ -175,7 +171,7 @@ test('protocols/v2-handler - getTokenInfo', (t) => {
 })
 
 test('protocols/v2-handler - clearToken', (t) => {
-  const handler = new ApiV2Handler({ rpc: {}, password: 'admin' })
+  const handler = new WMApiV2({ rpc: {}, password: 'admin' })
 
   handler.token = { token: 'test', sign: 'sign', key: 'key' }
   t.ok(handler.token, 'should have token')
@@ -185,7 +181,7 @@ test('protocols/v2-handler - clearToken', (t) => {
 })
 
 test('protocols/v2-handler - _getAPICodeMsg', (t) => {
-  const handler = new ApiV2Handler({ rpc: {}, password: 'admin' })
+  const handler = new WMApiV2({ rpc: {}, password: 'admin' })
 
   t.is(handler._getAPICodeMsg({ Code: 14 }), 'ERR_INVALID_CMD', 'should return correct message for 14')
   t.is(handler._getAPICodeMsg({ Code: 23 }), 'ERR_JSON_CMD', 'should return correct message for 23')
@@ -197,7 +193,7 @@ test('protocols/v2-handler - _getAPICodeMsg', (t) => {
 })
 
 test('protocols/v2-handler - isResponseOK', (t) => {
-  const handler = new ApiV2Handler({ rpc: {}, password: 'admin' })
+  const handler = new WMApiV2({ rpc: {}, password: 'admin' })
 
   t.ok(handler.isResponseOK({ Code: 131 }), 'should return true for 131')
   t.not(handler.isResponseOK({ Code: 135 }), 'should return false for 135')

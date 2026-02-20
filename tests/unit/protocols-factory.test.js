@@ -3,16 +3,17 @@
 const test = require('brittle')
 const {
   ApiHandlerFactory,
-  ApiV2Handler,
-  ApiV3Handler,
+  WMApiV2,
+  WMApiV3,
   API_VERSIONS,
+  DEFAULT_API_VERSION,
   API_DEFAULTS
 } = require('../../workers/lib/protocols')
 
 test('protocols/factory - exports', (t) => {
   t.ok(ApiHandlerFactory, 'should export ApiHandlerFactory')
-  t.ok(ApiV2Handler, 'should export ApiV2Handler')
-  t.ok(ApiV3Handler, 'should export ApiV3Handler')
+  t.ok(WMApiV2, 'should export WMApiV2')
+  t.ok(WMApiV3, 'should export WMApiV3')
   t.ok(API_VERSIONS, 'should export API_VERSIONS')
   t.ok(API_DEFAULTS, 'should export API_DEFAULTS')
 })
@@ -24,7 +25,7 @@ test('protocols/factory - create V2 handler', (t) => {
   })
 
   t.ok(handler, 'should create handler')
-  t.ok(handler instanceof ApiV2Handler, 'should be ApiV2Handler instance')
+  t.ok(handler instanceof WMApiV2, 'should be WMApiV2 instance')
   t.is(handler.password, 'admin', 'should set password')
 })
 
@@ -35,7 +36,7 @@ test('protocols/factory - create V3 handler', (t) => {
   })
 
   t.ok(handler, 'should create handler')
-  t.ok(handler instanceof ApiV3Handler, 'should be ApiV3Handler instance')
+  t.ok(handler instanceof WMApiV3, 'should be WMApiV3 instance')
   t.is(handler.password, 'super', 'should set password')
 })
 
@@ -50,8 +51,8 @@ test('protocols/factory - create with API_VERSIONS constants', (t) => {
     password: 'super'
   })
 
-  t.ok(v2Handler instanceof ApiV2Handler, 'should create V2 handler with constant')
-  t.ok(v3Handler instanceof ApiV3Handler, 'should create V3 handler with constant')
+  t.ok(v2Handler instanceof WMApiV2, 'should create V2 handler with constant')
+  t.ok(v3Handler instanceof WMApiV3, 'should create V3 handler with constant')
 })
 
 test('protocols/factory - create unsupported version throws', (t) => {
@@ -90,8 +91,8 @@ test('protocols/factory - getHandlerClass', (t) => {
   const v2Class = ApiHandlerFactory.getHandlerClass('2.0.5')
   const v3Class = ApiHandlerFactory.getHandlerClass('3.0.3')
 
-  t.is(v2Class, ApiV2Handler, 'should return ApiV2Handler class')
-  t.is(v3Class, ApiV3Handler, 'should return ApiV3Handler class')
+  t.is(v2Class, WMApiV2, 'should return WMApiV2 class')
+  t.is(v3Class, WMApiV3, 'should return WMApiV3 class')
 
   const invalidClass = ApiHandlerFactory.getHandlerClass('invalid')
   t.is(invalidClass, undefined, 'should return undefined for invalid version')
@@ -105,12 +106,9 @@ test('protocols/factory - getDefaultPort', (t) => {
   t.is(ApiHandlerFactory.getDefaultPort(undefined), 4028, 'should default to V2 port for undefined')
 })
 
-test('protocols/factory - getDefaultPassword', (t) => {
-  t.is(ApiHandlerFactory.getDefaultPassword('2.0.5'), 'admin', 'V2 password should be admin')
-  t.is(ApiHandlerFactory.getDefaultPassword('3.0.3'), 'super', 'V3 password should be super')
-  t.is(ApiHandlerFactory.getDefaultPassword('invalid'), 'admin', 'should default to V2 password for invalid')
-  t.is(ApiHandlerFactory.getDefaultPassword(null), 'admin', 'should default to V2 password for null')
-  t.is(ApiHandlerFactory.getDefaultPassword(undefined), 'admin', 'should default to V2 password for undefined')
+test('protocols/factory - DEFAULT_API_VERSION', (t) => {
+  t.is(DEFAULT_API_VERSION, '2.0.5', 'DEFAULT_API_VERSION should be 2.0.5')
+  t.is(DEFAULT_API_VERSION, API_VERSIONS.V2, 'DEFAULT_API_VERSION should equal API_VERSIONS.V2')
 })
 
 test('protocols/factory - isVersionSupported', (t) => {
@@ -145,13 +143,11 @@ test('protocols/factory - created handlers have correct properties', (t) => {
 })
 
 test('protocols/factory - API_VERSIONS matches handler static properties', (t) => {
-  t.is(API_VERSIONS.V2, ApiV2Handler.VERSION, 'API_VERSIONS.V2 should match ApiV2Handler.VERSION')
-  t.is(API_VERSIONS.V3, ApiV3Handler.VERSION, 'API_VERSIONS.V3 should match ApiV3Handler.VERSION')
+  t.is(API_VERSIONS.V2, WMApiV2.VERSION, 'API_VERSIONS.V2 should match WMApiV2.VERSION')
+  t.is(API_VERSIONS.V3, WMApiV3.VERSION, 'API_VERSIONS.V3 should match WMApiV3.VERSION')
 })
 
 test('protocols/factory - API_DEFAULTS matches handler static properties', (t) => {
-  t.is(API_DEFAULTS['2.0.5'].port, ApiV2Handler.DEFAULT_PORT, 'V2 port should match')
-  t.is(API_DEFAULTS['2.0.5'].password, ApiV2Handler.DEFAULT_PASSWORD, 'V2 password should match')
-  t.is(API_DEFAULTS['3.0.3'].port, ApiV3Handler.DEFAULT_PORT, 'V3 port should match')
-  t.is(API_DEFAULTS['3.0.3'].password, ApiV3Handler.DEFAULT_PASSWORD, 'V3 password should match')
+  t.is(API_DEFAULTS['2.0.5'].port, WMApiV2.DEFAULT_PORT, 'V2 port should match')
+  t.is(API_DEFAULTS['3.0.3'].port, WMApiV3.DEFAULT_PORT, 'V3 port should match')
 })

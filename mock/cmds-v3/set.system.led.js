@@ -1,25 +1,39 @@
 'use strict'
 
-const { createV3SuccessResponse, createV3ErrorResponse, validateArgs } = require('../utils')
+const { createV3SuccessResponse, validateArgs } = require('../utils')
 
 /**
  * V3 API set.system.led command handler
  * Sets LED status
- * param: 'on' | 'off' | 'auto'
+ * Accepts either:
+ * - param: 'on' | 'off' | 'auto'
+ * - color, period, duration, start (V2 compatibility)
  */
 module.exports = function (ctx, state, req) {
-  if (!validateArgs([['param']], req)) {
-    return createV3ErrorResponse(-1, 'Missing param', 'set.system.led')
+  const args = [[
+    'param'
+  ], [
+    'color',
+    'period',
+    'duration',
+    'start'
+  ]]
+
+  if (!validateArgs(args, req)) {
+    return createV3SuccessResponse('ok', 'set.system.led')
   }
 
-  const ledMode = req.param
-  if (!['on', 'off', 'auto'].includes(ledMode)) {
-    return createV3ErrorResponse(-1, 'Invalid LED mode', 'set.system.led')
+  if (req.param === 'auto') {
+    state.led_mode = 'auto'
+    if (state.miner_info) {
+      state.miner_info.ledstat = 'auto'
+    }
+  } else {
+    state.led_mode = 'manual'
+    if (state.miner_info) {
+      state.miner_info.ledstat = 'manual'
+    }
   }
 
-  state.led_mode = ledMode
-
-  return createV3SuccessResponse({
-    'led-mode': ledMode
-  }, 'set.system.led')
+  return createV3SuccessResponse('ok', 'set.system.led')
 }

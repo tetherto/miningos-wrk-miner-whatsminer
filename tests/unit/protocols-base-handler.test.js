@@ -1,11 +1,11 @@
 'use strict'
 
 const test = require('brittle')
-const BaseProtocolHandler = require('../../workers/lib/protocols/base-handler')
+const WMApiBase = require('../../workers/lib/protocols/base-handler')
 
 test('protocols/base-handler - cannot instantiate directly', (t) => {
   try {
-    const handler = new BaseProtocolHandler({}) // eslint-disable-line no-unused-vars
+    const handler = new WMApiBase({}) // eslint-disable-line no-unused-vars
     t.fail('should throw error when instantiated directly')
   } catch (error) {
     t.ok(error.message.includes('abstract class'), 'should throw abstract class error')
@@ -14,7 +14,7 @@ test('protocols/base-handler - cannot instantiate directly', (t) => {
 
 test('protocols/base-handler - VERSION throws error', (t) => {
   try {
-    const version = BaseProtocolHandler.VERSION // eslint-disable-line no-unused-vars
+    const version = WMApiBase.VERSION // eslint-disable-line no-unused-vars
     t.fail('should throw error for VERSION')
   } catch (error) {
     t.ok(error.message.includes('must be implemented'), 'should require implementation')
@@ -23,27 +23,17 @@ test('protocols/base-handler - VERSION throws error', (t) => {
 
 test('protocols/base-handler - DEFAULT_PORT throws error', (t) => {
   try {
-    const port = BaseProtocolHandler.DEFAULT_PORT // eslint-disable-line no-unused-vars
+    const port = WMApiBase.DEFAULT_PORT // eslint-disable-line no-unused-vars
     t.fail('should throw error for DEFAULT_PORT')
   } catch (error) {
     t.ok(error.message.includes('must be implemented'), 'should require implementation')
   }
 })
 
-test('protocols/base-handler - DEFAULT_PASSWORD throws error', (t) => {
-  try {
-    const password = BaseProtocolHandler.DEFAULT_PASSWORD // eslint-disable-line no-unused-vars
-    t.fail('should throw error for DEFAULT_PASSWORD')
-  } catch (error) {
-    t.ok(error.message.includes('must be implemented'), 'should require implementation')
-  }
-})
-
 // Test subclass can extend properly
-class TestHandler extends BaseProtocolHandler {
+class TestHandler extends WMApiBase {
   static get VERSION () { return 'test' }
   static get DEFAULT_PORT () { return 1234 }
-  static get DEFAULT_PASSWORD () { return 'test' }
   getAuthCommand () { return 'test_auth' }
   async authenticate () { return { token: 'test' } }
   async requestRead (cmd) { return { cmd } }
@@ -59,7 +49,6 @@ test('protocols/base-handler - subclass can extend', (t) => {
 test('protocols/base-handler - subclass static properties', (t) => {
   t.is(TestHandler.VERSION, 'test', 'should return VERSION')
   t.is(TestHandler.DEFAULT_PORT, 1234, 'should return DEFAULT_PORT')
-  t.is(TestHandler.DEFAULT_PASSWORD, 'test', 'should return DEFAULT_PASSWORD')
 })
 
 test('protocols/base-handler - subclass methods', async (t) => {

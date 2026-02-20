@@ -61,7 +61,6 @@ class WhatsminerMiner extends BaseMiner {
    * @returns {Promise<string>}
    */
   async _detectApiVersion () {
-    // If port is explicitly provided, infer version from port
     if (this.opts.port === 4433) {
       return API_VERSIONS.V3
     }
@@ -69,7 +68,6 @@ class WhatsminerMiner extends BaseMiner {
       return API_VERSIONS.V2
     }
 
-    // Try V2 first (more common), then V3
     const detectors = [
       { version: API_VERSIONS.V2, cmd: 'get_token' },
       { version: API_VERSIONS.V3, cmd: 'get.device.info' }
@@ -77,7 +75,7 @@ class WhatsminerMiner extends BaseMiner {
 
     for (const { version, cmd } of detectors) {
       try {
-        const res = await this._tryCommand(cmd)
+        const res = await this._execCommand(cmd)
         if (res && !res.error && res.Msg) {
           return version
         }
@@ -92,11 +90,11 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   /**
-   * Tries a command for version detection
+   * Executes a command for version detection
    * @param {string} command
    * @returns {Promise<Object>}
    */
-  async _tryCommand (command) {
+  async _execCommand (command) {
     const cmd = { cmd: command }
     const response = await this.rpc.request(JSON.stringify(cmd))
     return JSON.parse(response)
@@ -176,8 +174,6 @@ class WhatsminerMiner extends BaseMiner {
 
   async _requestReadEndpoint (command, additionalParams = {}) {
     const cmd = this.protocolHandler.transformCommand(command)
-
-    // For V3, certain commands need a param field (e.g., get.miner.status)
     const params = { ...additionalParams }
     if (this.protocolHandler.getStatusParam) {
       const statusParam = this.protocolHandler.getStatusParam(command)

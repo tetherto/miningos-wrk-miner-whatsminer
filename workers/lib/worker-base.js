@@ -62,15 +62,35 @@ class WrkMinerRack extends WrkRack {
     return thg.ctrl.getSnap()
   }
 
+  async registerThingHook0 (thg) {
+    await super.registerThingHook0(thg)
+
+    if (!thg.info) {
+      thg.info = {}
+    }
+
+    if (thg.opts.apiVersion) {
+      thg.info.apiVersion = thg.opts.apiVersion
+    }
+  }
+
+  async updateThingHook0 (thg, thgPrev) {
+    await super.updateThingHook0(thg, thgPrev)
+
+    if (thg.opts.apiVersion && thg.opts.apiVersion !== thg.info?.apiVersion) {
+      if (!thg.info) {
+        thg.info = {}
+      }
+      thg.info.apiVersion = thg.opts.apiVersion
+    }
+  }
+
   async connectThing (thg) {
     if (!thg.opts.address || !thg.opts.port || !thg.opts.password) {
       return 0
     }
 
-    // Determine API version: explicit opts > stored in info > auto-detect (null)
     const apiVersion = thg.opts.apiVersion || thg.info?.apiVersion || null
-
-    // Use version-specific port if not explicitly provided
     const port = thg.opts.port || this._getDefaultPortForVersion(apiVersion)
 
     const miner = new Miner({
@@ -89,16 +109,13 @@ class WrkMinerRack extends WrkRack {
       type: thg.type
     })
 
-    // Initialize the miner (performs version detection if needed)
     await miner.init()
 
-    // Store detected version in thing.info for persistence
     if (!thg.info) {
       thg.info = {}
     }
-    if (thg.info.apiVersion !== miner.apiVersion) {
-      thg.info.apiVersion = miner.apiVersion
-    }
+    thg.info.apiVersion = miner.apiVersion
+    await this.saveThingData(thg)
 
     miner.on('error', e => {
       this.debugThingError(thg, e)

@@ -1,7 +1,7 @@
 'use strict'
 
 const test = require('brittle')
-const ApiV3Handler = require('../../workers/lib/protocols/v3-handler')
+const WMApiV3 = require('../../workers/lib/protocols/v3-handler')
 const { API_VERSIONS, COMMAND_MAP_V3 } = require('../../workers/lib/protocols/constants')
 
 // Mock RPC for testing
@@ -17,20 +17,16 @@ const createMockRpc = (responses) => {
 }
 
 test('protocols/v3-handler - static VERSION', (t) => {
-  t.is(ApiV3Handler.VERSION, API_VERSIONS.V3, 'VERSION should be 3.0.3')
-  t.is(ApiV3Handler.VERSION, '3.0.3', 'VERSION should match string')
+  t.is(WMApiV3.VERSION, API_VERSIONS.V3, 'VERSION should be 3.0.3')
+  t.is(WMApiV3.VERSION, '3.0.3', 'VERSION should match string')
 })
 
 test('protocols/v3-handler - static DEFAULT_PORT', (t) => {
-  t.is(ApiV3Handler.DEFAULT_PORT, 4433, 'DEFAULT_PORT should be 4433')
-})
-
-test('protocols/v3-handler - static DEFAULT_PASSWORD', (t) => {
-  t.is(ApiV3Handler.DEFAULT_PASSWORD, 'super', 'DEFAULT_PASSWORD should be super')
+  t.is(WMApiV3.DEFAULT_PORT, 4433, 'DEFAULT_PORT should be 4433')
 })
 
 test('protocols/v3-handler - constructor', (t) => {
-  const handler = new ApiV3Handler({
+  const handler = new WMApiV3({
     rpc: {},
     password: 'testpass'
   })
@@ -40,12 +36,12 @@ test('protocols/v3-handler - constructor', (t) => {
 })
 
 test('protocols/v3-handler - getAuthCommand', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
   t.is(handler.getAuthCommand(), 'get.device.info', 'should return get.device.info')
 })
 
 test('protocols/v3-handler - transformCommand basic', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   // Test known command mappings
   t.is(handler.transformCommand('get_token'), 'get.device.info', 'get_token should map to get.device.info')
@@ -55,7 +51,7 @@ test('protocols/v3-handler - transformCommand basic', (t) => {
 })
 
 test('protocols/v3-handler - transformCommand all mappings', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   for (const [v2Cmd, v3Cmd] of Object.entries(COMMAND_MAP_V3)) {
     t.is(handler.transformCommand(v2Cmd), v3Cmd, `${v2Cmd} should map to ${v3Cmd}`)
@@ -63,14 +59,14 @@ test('protocols/v3-handler - transformCommand all mappings', (t) => {
 })
 
 test('protocols/v3-handler - transformCommand unknown returns unchanged', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   t.is(handler.transformCommand('unknown_cmd'), 'unknown_cmd', 'unknown command should remain unchanged')
   t.is(handler.transformCommand('custom.command'), 'custom.command', 'dot notation should remain unchanged')
 })
 
 test('protocols/v3-handler - getStatusParam', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   // V3 uses get.miner.status with param field
   t.is(handler.getStatusParam('summary'), 'summary', 'summary should return summary param')
@@ -81,7 +77,7 @@ test('protocols/v3-handler - getStatusParam', (t) => {
 })
 
 test('protocols/v3-handler - parseResponse returns unchanged', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   const response = { Code: 131, Msg: { data: 'test' } }
   t.alike(handler.parseResponse(response, 'cmd'), response, 'should return response unchanged')
@@ -100,7 +96,7 @@ test('protocols/v3-handler - authenticate success with V3 format', async (t) => 
     desc: 'get.device.info'
   }])
 
-  const handler = new ApiV3Handler({
+  const handler = new WMApiV3({
     rpc: mockRpc,
     password: 'super'
   })
@@ -122,7 +118,7 @@ test('protocols/v3-handler - authenticate IP limit error (V3 format)', async (t)
     desc: 'get.device.info'
   }])
 
-  const handler = new ApiV3Handler({
+  const handler = new WMApiV3({
     rpc: mockRpc,
     password: 'super'
   })
@@ -146,7 +142,7 @@ test('protocols/v3-handler - authenticate missing salt error', async (t) => {
     desc: 'get.device.info'
   }])
 
-  const handler = new ApiV3Handler({
+  const handler = new WMApiV3({
     rpc: mockRpc,
     password: 'super'
   })
@@ -168,7 +164,7 @@ test('protocols/v3-handler - authenticate fail response', async (t) => {
     desc: 'get.device.info'
   }])
 
-  const handler = new ApiV3Handler({
+  const handler = new WMApiV3({
     rpc: mockRpc,
     password: 'super'
   })
@@ -187,7 +183,7 @@ test('protocols/v3-handler - requestRead success', async (t) => {
     Msg: { api_ver: '3.0.3' }
   }])
 
-  const handler = new ApiV3Handler({
+  const handler = new WMApiV3({
     rpc: mockRpc,
     password: 'super'
   })
@@ -207,7 +203,7 @@ test('protocols/v3-handler - requestRead with params', async (t) => {
     }
   }
 
-  const handler = new ApiV3Handler({
+  const handler = new WMApiV3({
     rpc: mockRpc,
     password: 'super'
   })
@@ -224,7 +220,7 @@ test('protocols/v3-handler - requestRead error', async (t) => {
     }
   }
 
-  const handler = new ApiV3Handler({
+  const handler = new WMApiV3({
     rpc: mockRpc,
     password: 'super'
   })
@@ -238,7 +234,7 @@ test('protocols/v3-handler - requestRead error', async (t) => {
 })
 
 test('protocols/v3-handler - getTokenInfo', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   t.is(handler.getTokenInfo(), undefined, 'should return undefined when no salt')
 
@@ -247,7 +243,7 @@ test('protocols/v3-handler - getTokenInfo', (t) => {
 })
 
 test('protocols/v3-handler - generateTokenInfo', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   t.is(handler.generateTokenInfo('set.miner.power'), undefined, 'should return undefined when no salt')
 
@@ -262,7 +258,7 @@ test('protocols/v3-handler - generateTokenInfo', (t) => {
 })
 
 test('protocols/v3-handler - clearToken', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   handler.salt = '5QAHiKMb'
   t.ok(handler.salt, 'should have salt')
@@ -272,7 +268,7 @@ test('protocols/v3-handler - clearToken', (t) => {
 })
 
 test('protocols/v3-handler - _getAPICodeMsg V3 format', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   // V3 response codes
   t.is(handler._getAPICodeMsg({ code: 0 }), 'OK', 'should return OK for V3 code 0')
@@ -291,7 +287,7 @@ test('protocols/v3-handler - _getAPICodeMsg V3 format', (t) => {
 })
 
 test('protocols/v3-handler - isResponseOK', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   // V3 format
   t.ok(handler.isResponseOK({ code: 0 }), 'should return true for V3 code 0')
@@ -305,7 +301,7 @@ test('protocols/v3-handler - isResponseOK', (t) => {
 })
 
 test('protocols/v3-handler - command transformation patterns', (t) => {
-  const handler = new ApiV3Handler({ rpc: {}, password: 'super' })
+  const handler = new WMApiV3({ rpc: {}, password: 'super' })
 
   // Verify underscore to dot pattern
   const underscoreCommands = [

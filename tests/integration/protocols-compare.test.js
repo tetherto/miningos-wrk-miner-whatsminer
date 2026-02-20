@@ -74,17 +74,11 @@ test('Protocol Comparison - setup both servers', async (t) => {
 })
 
 test('Protocol Comparison - different default ports', (t) => {
-  const { ApiHandlerFactory } = require('../../workers/lib/protocols')
+  const { ApiHandlerFactory, DEFAULT_API_VERSION } = require('../../workers/lib/protocols')
 
   t.is(ApiHandlerFactory.getDefaultPort('2.0.5'), 4028, 'V2 default port')
   t.is(ApiHandlerFactory.getDefaultPort('3.0.3'), 4433, 'V3 default port')
-})
-
-test('Protocol Comparison - different default passwords', (t) => {
-  const { ApiHandlerFactory } = require('../../workers/lib/protocols')
-
-  t.is(ApiHandlerFactory.getDefaultPassword('2.0.5'), 'admin', 'V2 default password')
-  t.is(ApiHandlerFactory.getDefaultPassword('3.0.3'), 'super', 'V3 default password')
+  t.is(DEFAULT_API_VERSION, '2.0.5', 'DEFAULT_API_VERSION should be 2.0.5')
 })
 
 test('Protocol Comparison - different auth commands', (t) => {
@@ -96,9 +90,9 @@ test('Protocol Comparison - command transformation difference', (t) => {
   const testCommands = [
     { v2: 'get_token', v3: 'get.device.info' },
     { v2: 'get_version', v3: 'get.version' },
-    { v2: 'update_pools', v3: 'update.pools' },
-    { v2: 'power_on', v3: 'power.on' },
-    { v2: 'set_led', v3: 'set.led' }
+    { v2: 'update_pools', v3: 'set.miner.pools' },
+    { v2: 'power_on', v3: 'set.miner.service' },
+    { v2: 'set_led', v3: 'set.system.led' }
   ]
 
   for (const { v2, v3 } of testCommands) {

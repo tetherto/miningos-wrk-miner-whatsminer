@@ -1,7 +1,7 @@
 'use strict'
 
 const CryptoJS = require('crypto-js')
-const BaseProtocolHandler = require('./base-handler')
+const WMApiBase = require('./base-handler')
 const md5 = require('../utils/md5')
 const hex2a = require('../utils/hex2a')
 const { API_VERSIONS, API_DEFAULTS, RESPONSE_CODES } = require('./constants')
@@ -10,7 +10,7 @@ const { API_VERSIONS, API_DEFAULTS, RESPONSE_CODES } = require('./constants')
  * Protocol handler for Whatsminer API v2.0.5
  * Uses token-based authentication with MD5 crypt and AES-256 ECB encryption
  */
-class ApiV2Handler extends BaseProtocolHandler {
+class WMApiV2 extends WMApiBase {
   constructor (opts) {
     super(opts)
     this.token = undefined
@@ -22,10 +22,6 @@ class ApiV2Handler extends BaseProtocolHandler {
 
   static get DEFAULT_PORT () {
     return API_DEFAULTS[API_VERSIONS.V2].port
-  }
-
-  static get DEFAULT_PASSWORD () {
-    return API_DEFAULTS[API_VERSIONS.V2].password
   }
 
   getAuthCommand () {
@@ -186,4 +182,4 @@ class ApiV2Handler extends BaseProtocolHandler {
   }
 }
 
-module.exports = ApiV2Handler
+module.exports = WMApiV2

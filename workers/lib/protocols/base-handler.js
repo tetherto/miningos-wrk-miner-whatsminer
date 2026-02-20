@@ -4,10 +4,10 @@
  * Abstract base class defining the protocol interface for Whatsminer API handlers.
  * Implementations must override all methods.
  */
-class BaseProtocolHandler {
+class WMApiBase {
   constructor (opts) {
-    if (new.target === BaseProtocolHandler) {
-      throw new Error('BaseProtocolHandler is an abstract class and cannot be instantiated directly')
+    if (new.target === WMApiBase) {
+      throw new Error('WMApiBase is an abstract class and cannot be instantiated directly')
     }
     this.opts = opts
     this.rpc = opts.rpc
@@ -29,14 +29,6 @@ class BaseProtocolHandler {
    */
   static get DEFAULT_PORT () {
     throw new Error('DEFAULT_PORT must be implemented by subclass')
-  }
-
-  /**
-   * Returns the default password for this API version
-   * @returns {string}
-   */
-  static get DEFAULT_PASSWORD () {
-    throw new Error('DEFAULT_PASSWORD must be implemented by subclass')
   }
 
   /**
@@ -111,4 +103,4 @@ class BaseProtocolHandler {
   }
 }
 
-module.exports = BaseProtocolHandler
+module.exports = WMApiBase

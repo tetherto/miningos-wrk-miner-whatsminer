@@ -3,6 +3,7 @@
 const test = require('brittle')
 const {
   API_VERSIONS,
+  DEFAULT_API_VERSION,
   API_DEFAULTS,
   COMMAND_MAP_V3,
   COMMAND_MAP_V2,
@@ -15,6 +16,12 @@ test('protocols/constants - API_VERSIONS exports', (t) => {
   t.is(API_VERSIONS.V3, '3.0.3', 'V3 should be 3.0.3')
 })
 
+test('protocols/constants - DEFAULT_API_VERSION', (t) => {
+  t.ok(DEFAULT_API_VERSION, 'should export DEFAULT_API_VERSION')
+  t.is(DEFAULT_API_VERSION, '2.0.5', 'DEFAULT_API_VERSION should be 2.0.5')
+  t.is(DEFAULT_API_VERSION, API_VERSIONS.V2, 'DEFAULT_API_VERSION should equal API_VERSIONS.V2')
+})
+
 test('protocols/constants - API_DEFAULTS structure', (t) => {
   t.ok(API_DEFAULTS, 'should export API_DEFAULTS')
   t.ok(API_DEFAULTS['2.0.5'], 'should have 2.0.5 defaults')
@@ -24,14 +31,12 @@ test('protocols/constants - API_DEFAULTS structure', (t) => {
 test('protocols/constants - V2 defaults', (t) => {
   const v2 = API_DEFAULTS['2.0.5']
   t.is(v2.port, 4028, 'V2 default port should be 4028')
-  t.is(v2.password, 'admin', 'V2 default password should be admin')
   t.is(v2.authCommand, 'get_token', 'V2 auth command should be get_token')
 })
 
 test('protocols/constants - V3 defaults', (t) => {
   const v3 = API_DEFAULTS['3.0.3']
   t.is(v3.port, 4433, 'V3 default port should be 4433')
-  t.is(v3.password, 'super', 'V3 default password should be super')
   t.is(v3.authCommand, 'get.device.info', 'V3 auth command should be get.device.info')
 })
 

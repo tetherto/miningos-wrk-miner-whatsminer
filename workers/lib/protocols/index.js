@@ -1,12 +1,12 @@
 'use strict'
 
-const ApiV2Handler = require('./v2-handler')
-const ApiV3Handler = require('./v3-handler')
-const { API_VERSIONS, API_DEFAULTS } = require('./constants')
+const WMApiV2 = require('./v2-handler')
+const WMApiV3 = require('./v3-handler')
+const { API_VERSIONS, DEFAULT_API_VERSION, API_DEFAULTS } = require('./constants')
 
 const HANDLERS = {
-  [API_VERSIONS.V2]: ApiV2Handler,
-  [API_VERSIONS.V3]: ApiV3Handler
+  [API_VERSIONS.V2]: WMApiV2,
+  [API_VERSIONS.V3]: WMApiV3
 }
 
 /**
@@ -17,7 +17,7 @@ class ApiHandlerFactory {
    * Creates a protocol handler for the specified API version
    * @param {string} version - The API version ('2.0.5' or '3.0.3')
    * @param {Object} opts - Handler options (rpc, password, debugError, etc.)
-   * @returns {ApiV2Handler|ApiV3Handler}
+   * @returns {WMApiV2|WMApiV3}
    */
   static create (version, opts) {
     const HandlerClass = HANDLERS[version]
@@ -38,7 +38,7 @@ class ApiHandlerFactory {
   /**
    * Gets the handler class for a specific version
    * @param {string} version
-   * @returns {typeof ApiV2Handler|typeof ApiV3Handler}
+   * @returns {typeof WMApiV2|typeof WMApiV3}
    */
   static getHandlerClass (version) {
     return HANDLERS[version]
@@ -50,16 +50,7 @@ class ApiHandlerFactory {
    * @returns {number}
    */
   static getDefaultPort (version) {
-    return API_DEFAULTS[version]?.port || API_DEFAULTS[API_VERSIONS.V2].port
-  }
-
-  /**
-   * Gets the default password for a specific API version
-   * @param {string} version
-   * @returns {string}
-   */
-  static getDefaultPassword (version) {
-    return API_DEFAULTS[version]?.password || API_DEFAULTS[API_VERSIONS.V2].password
+    return API_DEFAULTS[version]?.port || API_DEFAULTS[DEFAULT_API_VERSION].port
   }
 
   /**
@@ -74,8 +65,9 @@ class ApiHandlerFactory {
 
 module.exports = {
   ApiHandlerFactory,
-  ApiV2Handler,
-  ApiV3Handler,
+  WMApiV2,
+  WMApiV3,
   API_VERSIONS,
+  DEFAULT_API_VERSION,
   API_DEFAULTS
 }

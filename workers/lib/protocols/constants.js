@@ -5,15 +5,15 @@ const API_VERSIONS = {
   V3: '3.0.3'
 }
 
+const DEFAULT_API_VERSION = API_VERSIONS.V2
+
 const API_DEFAULTS = {
   '2.0.5': {
     port: 4028,
-    password: 'admin',
     authCommand: 'get_token'
   },
   '3.0.3': {
     port: 4433,
-    password: 'super',
     authCommand: 'get.device.info'
   }
 }
@@ -144,6 +144,7 @@ const RESPONSE_CODES = RESPONSE_CODES_V2
 
 module.exports = {
   API_VERSIONS,
+  DEFAULT_API_VERSION,
   API_DEFAULTS,
   COMMAND_MAP_V3,
   COMMAND_MAP_V2,

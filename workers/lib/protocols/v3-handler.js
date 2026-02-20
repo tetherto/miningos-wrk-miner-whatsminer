@@ -1,7 +1,7 @@
 'use strict'
 
 const CryptoJS = require('crypto-js')
-const BaseProtocolHandler = require('./base-handler')
+const WMApiBase = require('./base-handler')
 const hex2a = require('../utils/hex2a')
 const { API_VERSIONS, API_DEFAULTS, COMMAND_MAP_V3, V3_STATUS_PARAMS, RESPONSE_CODES_V3 } = require('./constants')
 
@@ -13,7 +13,7 @@ const { API_VERSIONS, API_DEFAULTS, COMMAND_MAP_V3, V3_STATUS_PARAMS, RESPONSE_C
  * - Response codes: 0=Success, -1=Fail, -2=Invalid command, -4=No permission
  * - Uses dot notation commands (get.miner.status with param)
  */
-class ApiV3Handler extends BaseProtocolHandler {
+class WMApiV3 extends WMApiBase {
   constructor (opts) {
     super(opts)
     this.salt = undefined // Salt from get.device.info, used for token generation
@@ -25,10 +25,6 @@ class ApiV3Handler extends BaseProtocolHandler {
 
   static get DEFAULT_PORT () {
     return API_DEFAULTS[API_VERSIONS.V3].port
-  }
-
-  static get DEFAULT_PASSWORD () {
-    return API_DEFAULTS[API_VERSIONS.V3].password
   }
 
   getAuthCommand () {
@@ -120,18 +116,13 @@ class ApiV3Handler extends BaseProtocolHandler {
 
     while (retry < 3) {
       try {
-        // Ensure we have the salt
         if (this.salt === undefined) {
           await this.refreshToken()
         }
 
-        // Generate timestamp and per-command token
         const ts = Math.floor(Date.now() / 1000)
         const { token, key } = this._generateToken(command, ts)
 
-        // V3 write command format per documentation:
-        // {cmd, ts, token, account, param}
-        // Account must be 'super' (or user1-3 for limited permissions)
         const cmdObj = {
           cmd: command,
           ts,
@@ -143,7 +134,6 @@ class ApiV3Handler extends BaseProtocolHandler {
         const cmd = JSON.stringify(cmdObj)
         this.debugError(`Sending command ${cmd}`)
 
-        // V3 uses AES encryption with the derived key (SHA256 hash)
         const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
         const encCmd = {
           enc: 1,
@@ -164,12 +154,9 @@ class ApiV3Handler extends BaseProtocolHandler {
         const decrypted = CryptoJS.AES.decrypt(res.enc, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
         const response = JSON.parse(hex2a(decrypted))
 
-        // V3 uses code field, not Code
         const responseCode = response.code !== undefined ? response.code : response.Code
 
-        // V3: -4 = No permission (token error)
         if (responseCode === RESPONSE_CODES_V3.NO_PERMISSION) {
-          // Retry with fresh salt
           this.salt = undefined
           retry++
           continue
@@ -246,13 +233,18 @@ class ApiV3Handler extends BaseProtocolHandler {
       return response
     }
 
-    // Convert V3 response to V2 format for compatibility
     if (response?.code !== undefined) {
-      let msg = response.msg
+      const msg = response.msg
 
-      // Handle get.miner.status responses with V3 field names
       if (response.desc === 'get.miner.status' && typeof msg === 'object') {
-        msg = this._convertStatusResponse(msg, originalCommand)
+        const converted = this._convertStatusResponse(msg, originalCommand)
+        return {
+          STATUS: response.code === RESPONSE_CODES_V3.SUCCESS ? 'S' : 'E',
+          When: response.when || Date.now(),
+          Code: this._convertV3CodeToV2(response.code),
+          Description: response.desc || '',
+          ...converted
+        }
       }
 
       return {
@@ -425,4 +417,4 @@ class ApiV3Handler extends BaseProtocolHandler {
   }
 }
 
-module.exports = ApiV3Handler
+module.exports = WMApiV3
