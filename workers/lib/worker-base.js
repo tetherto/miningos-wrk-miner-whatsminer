@@ -115,7 +115,6 @@ class WrkMinerRack extends WrkRack {
       thg.info = {}
     }
     thg.info.apiVersion = miner.apiVersion
-    await this.saveThingData(thg)
 
     miner.on('error', e => {
       this.debugThingError(thg, e)

@@ -163,6 +163,30 @@ class WMApiV2 extends WMApiBase {
   }
 
   parseResponse (response, originalCommand) {
+    if (!response || response.Code !== 131) {
+      return response
+    }
+
+    const commandKeyMap = {
+      summary: 'SUMMARY',
+      pools: 'POOLS',
+      edevs: 'DEVS',
+      devdetails: 'DEVDETAILS',
+      get_miner_info: 'Msg',
+      get_version: 'Msg'
+    }
+
+    const key = commandKeyMap[originalCommand]
+    if (key && response.Msg) {
+      if (key === 'Msg') {
+        return response
+      }
+      return {
+        ...response,
+        [key]: Array.isArray(response.Msg) ? response.Msg : [response.Msg]
+      }
+    }
+
     return response
   }
 

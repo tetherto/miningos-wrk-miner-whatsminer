@@ -4,9 +4,16 @@ const WMApiV2 = require('./wm-api-v2')
 const WMApiV3 = require('./wm-api-v3')
 const { API_VERSIONS, DEFAULT_API_VERSION, API_DEFAULTS } = require('./constants')
 
+// Map major versions to handlers
 const HANDLERS = {
-  [API_VERSIONS.V2]: WMApiV2,
-  [API_VERSIONS.V3]: WMApiV3
+  2: WMApiV2,
+  3: WMApiV3
+}
+
+// Map major versions to canonical version strings
+const MAJOR_TO_CANONICAL = {
+  2: API_VERSIONS.V2,
+  3: API_VERSIONS.V3
 }
 
 /**
@@ -14,13 +21,35 @@ const HANDLERS = {
  */
 class ApiHandlerFactory {
   /**
+   * Extracts major version number from version string
+   * @param {string} version - Version string like '2.0.5', '2.2.2', '3.0.3'
+   * @returns {number|null} Major version number or null if invalid
+   */
+  static getMajorVersion (version) {
+    if (!version || typeof version !== 'string') return null
+    const match = version.match(/^(\d+)/)
+    return match ? parseInt(match[1], 10) : null
+  }
+
+  /**
+   * Normalizes any version string to canonical version (2.0.5 or 3.0.3)
+   * @param {string} version - Any version string like '2.2.2', '3.1.0'
+   * @returns {string} Canonical version string
+   */
+  static normalizeVersion (version) {
+    const major = ApiHandlerFactory.getMajorVersion(version)
+    return MAJOR_TO_CANONICAL[major] || DEFAULT_API_VERSION
+  }
+
+  /**
    * Creates a protocol handler for the specified API version
-   * @param {string} version - The API version ('2.0.5' or '3.0.3')
+   * @param {string} version - The API version (e.g., '2.0.5', '2.2.2', '3.0.3')
    * @param {Object} opts - Handler options (rpc, password, debugError, etc.)
    * @returns {WMApiV2|WMApiV3}
    */
   static create (version, opts) {
-    const HandlerClass = HANDLERS[version]
+    const major = ApiHandlerFactory.getMajorVersion(version)
+    const HandlerClass = HANDLERS[major]
     if (!HandlerClass) {
       throw new Error(`ERR_UNSUPPORTED_API_VERSION: ${version}`)
     }
@@ -32,7 +61,7 @@ class ApiHandlerFactory {
    * @returns {string[]}
    */
   static getSupportedVersions () {
-    return Object.keys(HANDLERS)
+    return Object.values(MAJOR_TO_CANONICAL)
   }
 
   /**
@@ -41,7 +70,8 @@ class ApiHandlerFactory {
    * @returns {typeof WMApiV2|typeof WMApiV3}
    */
   static getHandlerClass (version) {
-    return HANDLERS[version]
+    const major = ApiHandlerFactory.getMajorVersion(version)
+    return HANDLERS[major]
   }
 
   /**
@@ -50,7 +80,8 @@ class ApiHandlerFactory {
    * @returns {number}
    */
   static getDefaultPort (version) {
-    return API_DEFAULTS[version]?.port || API_DEFAULTS[DEFAULT_API_VERSION].port
+    const canonical = ApiHandlerFactory.normalizeVersion(version)
+    return API_DEFAULTS[canonical]?.port || API_DEFAULTS[DEFAULT_API_VERSION].port
   }
 
   /**
@@ -59,7 +90,8 @@ class ApiHandlerFactory {
    * @returns {boolean}
    */
   static isVersionSupported (version) {
-    return version in HANDLERS
+    const major = ApiHandlerFactory.getMajorVersion(version)
+    return major in HANDLERS
   }
 }
 

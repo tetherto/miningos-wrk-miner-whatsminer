@@ -66,7 +66,8 @@ test('protocols/factory - create unsupported version throws', (t) => {
 })
 
 test('protocols/factory - create invalid version throws', (t) => {
-  const invalidVersions = [null, undefined, '', 'invalid', '2.0', '3']
+  // These should throw - no valid major version
+  const invalidVersions = [null, undefined, '', 'invalid', 'abc']
 
   for (const version of invalidVersions) {
     try {
@@ -75,6 +76,16 @@ test('protocols/factory - create invalid version throws', (t) => {
     } catch (error) {
       t.ok(error.message.includes('ERR_UNSUPPORTED_API_VERSION'), `should throw for ${version}`)
     }
+  }
+})
+
+test('protocols/factory - create with partial version works', (t) => {
+  // These should work - major version is extractable
+  const validPartialVersions = ['2.0', '2', '3', '2.2.2', '3.1.0']
+
+  for (const version of validPartialVersions) {
+    const handler = ApiHandlerFactory.create(version, { rpc: {}, password: 'test' })
+    t.ok(handler, `should create handler for version: ${version}`)
   }
 })
 

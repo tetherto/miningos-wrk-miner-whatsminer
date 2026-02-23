@@ -236,7 +236,11 @@ class WMApiV3 extends WMApiBase {
     if (response?.code !== undefined) {
       const msg = response.msg
 
-      if (response.desc === 'get.miner.status' && typeof msg === 'object') {
+      const isStatusCommand = ['summary', 'pools', 'edevs', 'devdetails'].includes(originalCommand)
+      const isStatusResponse = response.desc === 'get.miner.status' ||
+        (isStatusCommand && typeof msg === 'object')
+
+      if (isStatusResponse && typeof msg === 'object') {
         const converted = this._convertStatusResponse(msg, originalCommand)
         return {
           STATUS: response.code === RESPONSE_CODES_V3.SUCCESS ? 'S' : 'E',
@@ -268,21 +272,29 @@ class WMApiV3 extends WMApiBase {
     // Convert summary if present
     if (msg.summary) {
       result.SUMMARY = [this._convertSummaryFields(msg.summary)]
+    } else if (originalCommand === 'summary' && msg.elapsed !== undefined) {
+      result.SUMMARY = [this._convertSummaryFields(msg)]
     }
 
     // Convert pools if present
     if (msg.pools) {
       result.POOLS = msg.pools.map(p => this._convertPoolFields(p))
+    } else if (originalCommand === 'pools' && Array.isArray(msg)) {
+      result.POOLS = msg.map(p => this._convertPoolFields(p))
     }
 
     // Convert edevs if present
     if (msg.edevs) {
       result.DEVS = msg.edevs.map(d => this._convertEdevFields(d))
+    } else if (originalCommand === 'edevs' && Array.isArray(msg)) {
+      result.DEVS = msg.map(d => this._convertEdevFields(d))
     }
 
     // Convert devdetails if present
     if (msg.devdetails) {
       result.DEVDETAILS = msg.devdetails.map(d => this._convertDevdetailFields(d))
+    } else if (originalCommand === 'devdetails' && Array.isArray(msg)) {
+      result.DEVDETAILS = msg.map(d => this._convertDevdetailFields(d))
     }
 
     return result
