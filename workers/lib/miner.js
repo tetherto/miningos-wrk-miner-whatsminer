@@ -183,12 +183,14 @@ class WhatsminerMiner extends BaseMiner {
     }
 
     const res = await this.protocolHandler.requestRead(cmd, params)
+    this.updateLastSeen()
     return this.protocolHandler.parseResponse(res, command)
   }
 
   async _requestWriteEndpoint (command, additionalParams = {}, json = true) {
     const cmd = this.protocolHandler.transformCommand(command)
     const res = await this.protocolHandler.requestWrite(cmd, additionalParams, json)
+    this.updateLastSeen()
     return res ? this.protocolHandler.parseResponse(res, command) : null
   }
 
@@ -246,41 +248,49 @@ class WhatsminerMiner extends BaseMiner {
 
   async getMinerStats () {
     const res = await this._requestReadEndpoint('summary')
+
+    if (!res?.SUMMARY?.[0]) {
+      const errorMsg = res?.Msg || 'Unknown error'
+      const errorCode = res?.Code || 0
+      throw new Error(`ERR_MINER_STATS_FAILED: ${errorMsg} (Code: ${errorCode})`)
+    }
+
+    const summary = res.SUMMARY[0]
     const processedStats = {
-      elapsed: res.SUMMARY[0].Elapsed,
-      mhs_av: res.SUMMARY[0]['MHS av'],
-      mhs_5s: res.SUMMARY[0]['MHS 5s'],
-      mhs_1m: res.SUMMARY[0]['MHS 1m'],
-      mhs_5m: res.SUMMARY[0]['MHS 5m'],
-      mhs_15m: res.SUMMARY[0]['MHS 15m'],
+      elapsed: summary.Elapsed,
+      mhs_av: summary['MHS av'],
+      mhs_5s: summary['MHS 5s'],
+      mhs_1m: summary['MHS 1m'],
+      mhs_5m: summary['MHS 5m'],
+      mhs_15m: summary['MHS 15m'],
       prev_mhs: this._cachedPrevHashrate,
-      hs_rt: res.SUMMARY[0]['HS RT'],
-      accepted: res.SUMMARY[0].Accepted,
-      rejected: res.SUMMARY[0].Rejected,
-      total_mh: res.SUMMARY[0]['Total MH'],
-      temperature: res.SUMMARY[0].Temperature,
-      freq_avg: res.SUMMARY[0].freq_avg,
-      fan_speed_in: res.SUMMARY[0]['Fan Speed In'],
-      fan_speed_out: res.SUMMARY[0]['Fan Speed Out'],
-      power: res.SUMMARY[0].Power,
-      power_rate: res.SUMMARY[0]['Power Rate'],
-      pool_rejected: res.SUMMARY[0]['Pool Rejected%'],
-      pool_stale: res.SUMMARY[0]['Pool Stale%'],
-      uptime: res.SUMMARY[0].Uptime,
-      hash_stable: res.SUMMARY[0]['Hash Stable'],
-      hash_stable_cost_seconds: res.SUMMARY[0]['Hash Stable Cost Seconds'],
-      hash_deviation: res.SUMMARY[0]['Hash Deviation%'],
-      target_freq: res.SUMMARY[0]['Target Freq'],
-      target_mhs: res.SUMMARY[0]['Target MHS'],
-      env_temp: res.SUMMARY[0]['Env Temp'],
-      power_mode: res.SUMMARY[0]['Power Mode'],
-      factory_ghs: res.SUMMARY[0]['Factory GHS'],
-      power_limit: res.SUMMARY[0]['Power Limit'],
-      chip_temp_min: res.SUMMARY[0]['Chip Temp Min'],
-      chip_temp_max: res.SUMMARY[0]['Chip Temp Max'],
-      chip_temp_avg: res.SUMMARY[0]['Chip Temp Avg'],
-      debug: res.SUMMARY[0].Debug,
-      btminer_fast_boot: res.SUMMARY[0]['Btminer Fast Boot']
+      hs_rt: summary['HS RT'],
+      accepted: summary.Accepted,
+      rejected: summary.Rejected,
+      total_mh: summary['Total MH'],
+      temperature: summary.Temperature,
+      freq_avg: summary.freq_avg,
+      fan_speed_in: summary['Fan Speed In'],
+      fan_speed_out: summary['Fan Speed Out'],
+      power: summary.Power,
+      power_rate: summary['Power Rate'],
+      pool_rejected: summary['Pool Rejected%'],
+      pool_stale: summary['Pool Stale%'],
+      uptime: summary.Uptime,
+      hash_stable: summary['Hash Stable'],
+      hash_stable_cost_seconds: summary['Hash Stable Cost Seconds'],
+      hash_deviation: summary['Hash Deviation%'],
+      target_freq: summary['Target Freq'],
+      target_mhs: summary['Target MHS'],
+      env_temp: summary['Env Temp'],
+      power_mode: summary['Power Mode'],
+      factory_ghs: summary['Factory GHS'],
+      power_limit: summary['Power Limit'],
+      chip_temp_min: summary['Chip Temp Min'],
+      chip_temp_max: summary['Chip Temp Max'],
+      chip_temp_avg: summary['Chip Temp Avg'],
+      debug: summary.Debug,
+      btminer_fast_boot: summary['Btminer Fast Boot']
     }
 
     this._cachedPrevHashrate = processedStats.mhs_5m
