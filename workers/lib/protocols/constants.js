@@ -30,6 +30,9 @@ const COMMAND_MAP_V3 = {
   get_error_code: 'get.error.code',
   get_psu: 'get.psu',
 
+  // Status command
+  status: 'get.miner.setting',
+
   // V3 uses get.miner.status with param instead of separate commands
   summary: 'get.miner.status',
   pools: 'get.miner.status',

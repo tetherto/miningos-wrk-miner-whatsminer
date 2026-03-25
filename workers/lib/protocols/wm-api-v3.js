@@ -236,11 +236,11 @@ class WMApiV3 extends WMApiBase {
     if (response?.code !== undefined) {
       const msg = response.msg
 
-      const isStatusCommand = ['summary', 'pools', 'edevs', 'devdetails'].includes(originalCommand)
-      const isStatusResponse = response.desc === 'get.miner.status' ||
-        (isStatusCommand && typeof msg === 'object')
+      const isMinerStatusCommand = ['summary', 'pools', 'edevs', 'devdetails'].includes(originalCommand)
+      const isMinerStatusResponse = response.desc === 'get.miner.status' ||
+        (isMinerStatusCommand && typeof msg === 'object')
 
-      if (isStatusResponse && typeof msg === 'object') {
+      if (isMinerStatusResponse && typeof msg === 'object') {
         const converted = this._convertStatusResponse(msg, originalCommand)
         return {
           STATUS: response.code === RESPONSE_CODES_V3.SUCCESS ? 'S' : 'E',
@@ -248,6 +248,16 @@ class WMApiV3 extends WMApiBase {
           Code: this._convertV3CodeToV2(response.code),
           Description: response.desc || '',
           ...converted
+        }
+      }
+
+      if (originalCommand === 'status' && typeof msg === 'object') {
+        return {
+          STATUS: response.code === RESPONSE_CODES_V3.SUCCESS ? 'S' : 'E',
+          When: response.when || Date.now(),
+          Code: this._convertV3CodeToV2(response.code),
+          Msg: this._convertSettingFields(msg),
+          Description: response.desc || ''
         }
       }
 
@@ -383,6 +393,22 @@ class WMApiV3 extends WMApiBase {
       Name: detail.name || 'SM',
       Driver: detail.driver || '',
       Model: detail.model || ''
+    }
+  }
+
+  _convertSettingFields (msg) {
+    return {
+      mineroff: msg['miner-off'] || 'false',
+      mineroff_reason: msg['miner-off-reason'] || '',
+      mineroff_time: msg['miner-off-time'] || '',
+      FirmwareVersion: msg['firmware-version'] || '',
+      power_mode: msg['power-mode'] || 'normal',
+      power_limit_set: msg['power-limit-set'] || '',
+      hash_percent: msg['hash-percent'] || '0',
+      fast_mining: msg['fast-mining'] || 'false',
+      fast_hash: msg['fast-hash'] || 'false',
+      liquid_temp: msg['liquid-temp'] || 0,
+      power_pct: msg['power-pct'] !== undefined ? msg['power-pct'].toString() : '100'
     }
   }
 

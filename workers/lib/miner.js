@@ -246,6 +246,29 @@ class WhatsminerMiner extends BaseMiner {
     }
   }
 
+  async getMinerStatus () {
+    const res = await this._requestReadEndpoint('status')
+
+    if (!res?.Msg || typeof res.Msg !== 'object') {
+      return null
+    }
+
+    const msg = res.Msg
+    return {
+      mineroff: msg.mineroff === 'true',
+      mineroff_reason: msg.mineroff_reason || '',
+      mineroff_time: msg.mineroff_time || '',
+      firmware_version: msg.FirmwareVersion || '',
+      power_mode: msg.power_mode || '',
+      power_limit_set: msg.power_limit_set || '',
+      hash_percent: msg.hash_percent || '0',
+      fast_mining: msg.fast_mining === 'true',
+      fast_hash: msg.fast_hash === 'true',
+      liquid_temp: parseFloat(msg.liquid_temp) || 0,
+      power_pct: parseFloat(msg.power_pct) || 100
+    }
+  }
+
   async getMinerStats () {
     const res = await this._requestReadEndpoint('summary')
 
@@ -760,7 +783,8 @@ class WhatsminerMiner extends BaseMiner {
       devices: this.getDevices.bind(this),
       errors: this.getErrors.bind(this),
       miner_info: this.getMinerInfo.bind(this),
-      version: this.getVersion.bind(this)
+      version: this.getVersion.bind(this),
+      miner_status: this.getMinerStatus.bind(this)
     }, 3)
 
     this._handleErrorUpdates(data.errors)
@@ -808,7 +832,12 @@ class WhatsminerMiner extends BaseMiner {
           }))
         },
         miner_specific: {
-          upfreq_speed: data.miner_info.upfreq_speed ? parseFloat(data.miner_info.upfreq_speed) : undefined
+          upfreq_speed: data.miner_info.upfreq_speed ? parseFloat(data.miner_info.upfreq_speed) : undefined,
+          fast_mining: data.miner_status?.fast_mining || false,
+          fast_hash: data.miner_status?.fast_hash || false,
+          hash_percent: data.miner_status?.hash_percent || '0',
+          liquid_temp: data.miner_status?.liquid_temp || 0,
+          power_pct: data.miner_status?.power_pct || 100
         }
       },
       config: {
@@ -823,8 +852,8 @@ class WhatsminerMiner extends BaseMiner {
           url: pool.url,
           username: pool.user
         })),
-        power_mode: this._getPowerMode(data.stats),
-        suspended: this._isSuspended(data.stats),
+        power_mode: data.miner_status?.power_mode || this._getPowerMode(data.stats),
+        suspended: data.miner_status ? data.miner_status.mineroff : this._isSuspended(data.stats),
         led_status: data.miner_info.ledstat !== 'auto',
         firmware_ver: data.version.whatsminer.firmware,
         api_version: this.apiVersion
