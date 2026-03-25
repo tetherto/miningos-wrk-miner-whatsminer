@@ -320,6 +320,7 @@ function createBaseState (options = {}) {
     pre_power_on: false,
     ...(options.led_mode !== undefined && { led_mode: options.led_mode }),
     target_freq_pct: 100,
+    power_pct: 100,
     temp_offset: 0,
     currentTemp: 36.0,
     activeTokens: 0,

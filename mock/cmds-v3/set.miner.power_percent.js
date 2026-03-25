@@ -17,6 +17,7 @@ module.exports = function (ctx, state, req) {
   }
 
   state.target_freq_pct = percent
+  state.power_pct = percent
 
   return createV3SuccessResponse({
     'power-percent': percent

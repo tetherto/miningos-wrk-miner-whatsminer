@@ -141,7 +141,7 @@ if (require.main === module) {
 
 function runServer (argv, ops = {}) {
   const apiVersion = argv.apiVersion || 'v2'
-  const defaultPassword = apiVersion === 'v3' ? 'super' : 'admin'
+  const defaultPassword = apiVersion === 'v3' ? 'admin_lab' : 'admin_lab'
 
   const CTX = {
     host: argv.host,
