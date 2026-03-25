@@ -101,6 +101,20 @@ test('V2 Protocol - getMinerInfo', async (t) => {
   t.ok(info.proto, 'should have proto')
 })
 
+test('V2 Protocol - getMinerStatus', async (t) => {
+  const status = await miner.getMinerStatus()
+
+  t.ok(status, 'should return status')
+  t.is(typeof status.mineroff, 'boolean', 'should have mineroff as boolean')
+  t.is(typeof status.fast_mining, 'boolean', 'should have fast_mining as boolean')
+  t.is(typeof status.fast_hash, 'boolean', 'should have fast_hash as boolean')
+  t.ok(typeof status.power_mode === 'string', 'should have power_mode')
+  t.ok(typeof status.liquid_temp === 'number', 'should have liquid_temp as number')
+  t.ok(typeof status.power_pct === 'number', 'should have power_pct as number')
+  t.ok(typeof status.hash_percent === 'string', 'should have hash_percent')
+  t.ok(typeof status.firmware_version === 'string', 'should have firmware_version')
+})
+
 test('V2 Protocol - getSnap', async (t) => {
   const snap = await miner.getSnap()
 
@@ -109,6 +123,17 @@ test('V2 Protocol - getSnap', async (t) => {
   t.ok(snap.stats, 'should have stats')
   t.ok(snap.config, 'should have config')
   t.is(snap.config.api_version, '2.0.5', 'should have api_version in config')
+
+  // Verify miner_specific includes status fields
+  t.ok(snap.stats.miner_specific, 'should have miner_specific')
+  t.is(typeof snap.stats.miner_specific.fast_mining, 'boolean', 'should have fast_mining in miner_specific')
+  t.is(typeof snap.stats.miner_specific.fast_hash, 'boolean', 'should have fast_hash in miner_specific')
+  t.ok(typeof snap.stats.miner_specific.liquid_temp === 'number', 'should have liquid_temp in miner_specific')
+  t.ok(typeof snap.stats.miner_specific.power_pct === 'number', 'should have power_pct in miner_specific')
+
+  // Verify config uses status data
+  t.ok(typeof snap.config.suspended === 'boolean', 'should have suspended as boolean')
+  t.ok(typeof snap.config.power_mode === 'string', 'should have power_mode as string')
 })
 
 test('V2 Protocol - setLED on', async (t) => {
