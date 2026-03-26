@@ -254,6 +254,8 @@ class WhatsminerMiner extends BaseMiner {
     }
 
     const msg = res.Msg
+    const liquidTemp = parseFloat(msg.liquid_temp)
+    const powerPct = parseFloat(msg.power_pct)
     return {
       mineroff: msg.mineroff === 'true',
       mineroff_reason: msg.mineroff_reason || '',
@@ -264,8 +266,8 @@ class WhatsminerMiner extends BaseMiner {
       hash_percent: msg.hash_percent || '0',
       fast_mining: msg.fast_mining === 'true',
       fast_hash: msg.fast_hash === 'true',
-      liquid_temp: parseFloat(msg.liquid_temp) || 0,
-      power_pct: parseFloat(msg.power_pct) || 100
+      liquid_temp: !isNaN(liquidTemp) ? liquidTemp : 0,
+      power_pct: !isNaN(powerPct) ? powerPct : 100
     }
   }
 

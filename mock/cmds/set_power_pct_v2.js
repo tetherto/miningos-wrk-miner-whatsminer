@@ -7,7 +7,6 @@ const args = [[
 ]]
 
 module.exports = function (ctx, state, req) {
-  console.log('Received set_power_pct_v2 command with args', req)
   if (validateArgs(args, req)) {
     const percent = req.percent
     if (percent > 200 || percent <= 0) {
