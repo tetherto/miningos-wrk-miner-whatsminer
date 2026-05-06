@@ -2,7 +2,7 @@
 
 const test = require('brittle')
 const Miner = require('../../workers/lib/miner')
-const TcpFacility = require('svc-facs-tcp')
+const TcpFacility = require('@tetherto/svc-facs-tcp')
 const srv = require('../../mock/server')
 
 const V2_PORT = 24028

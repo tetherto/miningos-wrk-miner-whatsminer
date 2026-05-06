@@ -45,9 +45,9 @@ test('alerts - pcb_temp_warning valid function', (t) => {
   }
 
   // Mock the libUtils functions
-  const originalLibUtils = require('miningos-tpl-wrk-miner/workers/lib/utils')
-  require('miningos-tpl-wrk-miner/workers/lib/utils').isValidSnap = mockLibUtils.isValidSnap
-  require('miningos-tpl-wrk-miner/workers/lib/utils').isOffline = mockLibUtils.isOffline
+  const originalLibUtils = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils')
+  require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils').isValidSnap = mockLibUtils.isValidSnap
+  require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils').isOffline = mockLibUtils.isOffline
 
   const ctx = { conf: { pcb_temp_warning: { lowTemp: 60, normalTemp: 70, highTemp: 80 } } }
 
@@ -68,8 +68,8 @@ test('alerts - pcb_temp_warning valid function', (t) => {
   t.not(pcbTempWarning.valid(ctxNoConfig, validSnap), 'should return false when config is missing')
 
   // Restore original functions
-  require('miningos-tpl-wrk-miner/workers/lib/utils').isValidSnap = originalLibUtils.isValidSnap
-  require('miningos-tpl-wrk-miner/workers/lib/utils').isOffline = originalLibUtils.isOffline
+  require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils').isValidSnap = originalLibUtils.isValidSnap
+  require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils').isOffline = originalLibUtils.isOffline
 })
 
 test('alerts - chip_temp_warning valid function', (t) => {
@@ -80,9 +80,9 @@ test('alerts - chip_temp_warning valid function', (t) => {
   }
 
   // Mock the libUtils functions
-  const originalLibUtils = require('miningos-tpl-wrk-miner/workers/lib/utils')
-  require('miningos-tpl-wrk-miner/workers/lib/utils').isValidSnap = mockLibUtils.isValidSnap
-  require('miningos-tpl-wrk-miner/workers/lib/utils').isOffline = mockLibUtils.isOffline
+  const originalLibUtils = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils')
+  require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils').isValidSnap = mockLibUtils.isValidSnap
+  require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils').isOffline = mockLibUtils.isOffline
 
   const ctx = { conf: { chip_temp_warning: { lowTemp: 60, normalTemp: 70, highTemp: 80 } } }
 
@@ -103,8 +103,8 @@ test('alerts - chip_temp_warning valid function', (t) => {
   t.not(chipTempWarning.valid(ctxNoConfig, validSnap), 'should return false when config is missing')
 
   // Restore original functions
-  require('miningos-tpl-wrk-miner/workers/lib/utils').isValidSnap = originalLibUtils.isValidSnap
-  require('miningos-tpl-wrk-miner/workers/lib/utils').isOffline = originalLibUtils.isOffline
+  require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils').isValidSnap = originalLibUtils.isValidSnap
+  require('@tetherto/miningos-tpl-wrk-miner/workers/lib/utils').isOffline = originalLibUtils.isOffline
 })
 
 test('alerts - pcb_temp_warning probe function', (t) => {
