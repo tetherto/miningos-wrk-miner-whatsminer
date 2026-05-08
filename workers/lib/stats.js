@@ -1,8 +1,8 @@
 'use strict'
 
-const libStats = require('miningos-tpl-wrk-miner/workers/lib/stats')
-const { STATUS } = require('miningos-tpl-wrk-miner/workers/lib/constants')
-const { getVal } = require('miningos-lib-stats/utils')
+const libStats = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/stats')
+const { STATUS } = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/constants')
+const { getVal } = require('@tetherto/miningos-lib-stats/utils')
 
 const MINOR_ERROR_CODES_M56S_M30_SET = new Set(
   [203, 204, 205, 206, 219, 236, 248, 270, 275, 320, 321, 322, 620, 714, 901, 2320, 2330, 2350, 5140, 5141]

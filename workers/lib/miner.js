@@ -1,6 +1,6 @@
 'use strict'
 
-const BaseMiner = require('miningos-tpl-wrk-miner/workers/lib/base')
+const BaseMiner = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/base')
 const async = require('async')
 const net = require('node:net')
 const CryptoJS = require('crypto-js')
@@ -13,7 +13,7 @@ const {
   MINOR_ERROR_CODES_M53_SET,
   MINER_COOLING_TYPE_MAP
 } = require('./constants')
-const { STATUS, POWER_MODE } = require('miningos-tpl-wrk-miner/workers/lib/constants')
+const { STATUS, POWER_MODE } = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/constants')
 
 function isResOK (res) {
   return res?.Code === 131

@@ -1,8 +1,8 @@
 'use strict'
 
-const WrkRack = require('miningos-tpl-wrk-miner/workers/rack.miner.wrk')
+const WrkRack = require('@tetherto/miningos-tpl-wrk-miner/workers/rack.miner.wrk')
 const Miner = require('./miner.js')
-const TcpFacility = require('svc-facs-tcp')
+const TcpFacility = require('@tetherto/svc-facs-tcp')
 const async = require('async')
 
 const DEFAULT_PORT = 4028
@@ -13,7 +13,7 @@ class WrkMinerRack extends WrkRack {
     super.init()
 
     this.setInitFacs([
-      ['fac', 'svc-facs-tcp', '0', '0', {}, 0]
+      ['fac', '@tetherto/svc-facs-tcp', '0', '0', {}, 0]
     ])
   }
 
