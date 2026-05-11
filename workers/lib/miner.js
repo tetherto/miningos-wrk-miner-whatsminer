@@ -218,6 +218,123 @@ class WhatsminerMiner extends BaseMiner {
     return res
   }
 
+  async _requestDownloadLogs () {
+    if (!this.token) {
+      await this._refreshToken()
+    }
+
+    const downloadCmd = this.protocolHandler.transformCommand('download_logs')
+    let encCmd, decryptionKey
+
+    if (this.apiVersion === API_VERSIONS.V3) {
+      const tokenInfo = this.protocolHandler.generateTokenInfo(downloadCmd)
+      const { token, key } = tokenInfo
+      const ts = Math.floor(Date.now() / 1000)
+      const cmd = JSON.stringify({ cmd: downloadCmd, ts, token, account: 'super' })
+      const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
+      encCmd = JSON.stringify({ enc: 1, data })
+      decryptionKey = key
+    } else {
+      const tokenInfo = this.protocolHandler.getTokenInfo()
+      const { sign, key } = tokenInfo
+      const cmd = JSON.stringify({ token: sign, cmd: downloadCmd })
+      const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
+      encCmd = JSON.stringify({ enc: 1, data })
+      decryptionKey = key
+    }
+
+    return new Promise((resolve, reject) => {
+      const socket = new net.Socket()
+      let phase = 'text'
+      let logFileLen = 0
+      const chunks = []
+      let receivedLen = 0
+
+      socket.connect(this.opts.port, this.opts.address, () => {
+        socket.write(encCmd)
+      })
+
+      socket.on('data', (data) => {
+        if (phase === 'text') {
+          let resp
+          try {
+            const decoded = JSON.parse(data.toString())
+            if (decoded.enc) {
+              const decrypted = CryptoJS.AES.decrypt(decoded.enc, CryptoJS.SHA256(decryptionKey), { mode: CryptoJS.mode.ECB }).toString()
+              resp = JSON.parse(hex2a(decrypted))
+            } else {
+              resp = decoded
+            }
+          } catch (e) {
+            socket.destroy()
+            reject(new Error('ERR_DOWNLOAD_LOGS_PARSE_FAILED'))
+            return
+          }
+
+          const isOk = this.protocolHandler.isResponseOK(resp)
+          if (!isOk) {
+            socket.destroy()
+            reject(new Error(`ERR_DOWNLOAD_LOGS_FAILED: Code ${resp.Code || resp.code}`))
+            return
+          }
+
+          const msg = resp.Msg || resp.msg || {}
+          logFileLen = parseInt(msg.logfilelen || msg.logsize || '0')
+          if (!logFileLen || logFileLen <= 0) {
+            socket.destroy()
+            reject(new Error('ERR_DOWNLOAD_LOGS_EMPTY'))
+            return
+          }
+          phase = 'binary'
+        } else {
+          chunks.push(data)
+          receivedLen += data.length
+          if (receivedLen >= logFileLen) {
+            socket.destroy()
+            const logBuffer = Buffer.concat(chunks, logFileLen)
+            resolve({
+              logFileLen,
+              logData: logBuffer.toString('base64')
+            })
+          }
+        }
+      })
+
+      socket.on('end', () => {
+        if (phase === 'binary' && chunks.length > 0) {
+          const logBuffer = Buffer.concat(chunks)
+          resolve({
+            logFileLen: logBuffer.length,
+            logData: logBuffer.toString('base64')
+          })
+        }
+      })
+
+      socket.on('error', (error) => { reject(error) })
+
+      socket.setTimeout(60000, () => {
+        socket.destroy()
+        reject(new Error('ERR_DOWNLOAD_LOGS_TIMEOUT'))
+      })
+    })
+  }
+
+  async downloadLogs () {
+    try {
+      const result = await this._requestDownloadLogs()
+      return {
+        success: true,
+        data: {
+          logFileLen: result.logFileLen,
+          logData: result.logData
+        }
+      }
+    } catch (e) {
+      this.debugError('downloadLogs error', e)
+      return { success: false, error_msg: e.message }
+    }
+  }
+
   validateWriteAction (...params) {
     const [action, ...args] = params
 
@@ -226,6 +343,10 @@ class WhatsminerMiner extends BaseMiner {
       if (!['low', 'normal', 'high', 'sleep'].includes(mode)) {
         throw new Error('ERR_SET_POWER_MODE_INVALID')
       }
+      return 1
+    }
+
+    if (action === 'downloadLogs') {
       return 1
     }
 

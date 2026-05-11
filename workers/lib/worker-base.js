@@ -23,7 +23,8 @@ class WrkMinerRack extends WrkRack {
       (next) => { super._start(next) },
       (next) => {
         this._addWhitelistedActions([
-          ['setPowerPct', 1]
+          ['setPowerPct', 1],
+          ['downloadLogs', 1]
         ])
 
         next()
