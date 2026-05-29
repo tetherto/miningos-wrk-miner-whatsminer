@@ -3,6 +3,8 @@
 const BaseMiner = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/base')
 const async = require('async')
 const net = require('node:net')
+const fs = require('node:fs')
+const path = require('node:path')
 const CryptoJS = require('crypto-js')
 const hex2a = require('./utils/hex2a')
 const readFirmware = require('./utils/firmware')
@@ -20,8 +22,9 @@ function isResOK (res) {
 }
 
 class WhatsminerMiner extends BaseMiner {
-  constructor ({ socketer, apiVersion, ...opts }) {
+  constructor ({ socketer, apiVersion, getLogCoreManager, ...opts }) {
     super(opts)
+    this._getLogCoreManager = getLogCoreManager || (() => null)
 
     this.rpc = socketer.rpc({
       tcpOpts: {
@@ -292,10 +295,7 @@ class WhatsminerMiner extends BaseMiner {
           if (receivedLen >= logFileLen) {
             socket.destroy()
             const logBuffer = Buffer.concat(chunks, logFileLen)
-            resolve({
-              logFileLen,
-              logData: logBuffer.toString('base64')
-            })
+            resolve({ logFileLen, logBuffer })
           }
         }
       })
@@ -303,10 +303,7 @@ class WhatsminerMiner extends BaseMiner {
       socket.on('end', () => {
         if (phase === 'binary' && chunks.length > 0) {
           const logBuffer = Buffer.concat(chunks)
-          resolve({
-            logFileLen: logBuffer.length,
-            logData: logBuffer.toString('base64')
-          })
+          resolve({ logFileLen: logBuffer.length, logBuffer })
         }
       })
 
@@ -322,16 +319,37 @@ class WhatsminerMiner extends BaseMiner {
   async downloadLogs () {
     try {
       const result = await this._requestDownloadLogs()
-      return {
-        success: true,
-        data: {
-          logFileLen: result.logFileLen,
-          logData: result.logData
-        }
-      }
+      const { logBuffer, logFileLen } = result
+
+      // Serve the raw binary via Hypercore/Hyperswarm (data plane).
+      // Only tiny metadata is returned through HRPC (signal plane).
+      const logCoreManager = this._getLogCoreManager()
+      if (!logCoreManager) throw new Error('ERR_LOG_CORE_MANAGER_NOT_READY')
+      const meta = await logCoreManager.serveLog(logBuffer, this.opts.id)
+
+      // Also write a local debug file (metadata only, not raw bytes)
+      this._saveResponseFile(meta)
+
+      return { success: true, data: meta }
     } catch (e) {
       this.debugError('downloadLogs error', e)
       return { success: false, error_msg: e.message }
+    }
+  }
+
+  _saveResponseFile (meta) {
+    try {
+      const logsDir = path.join(process.cwd(), 'logs')
+      if (!fs.existsSync(logsDir)) {
+        fs.mkdirSync(logsDir, { recursive: true })
+      }
+      const fileName = `download-logs-${this.opts.id || this.opts.address}-${Date.now()}.txt`
+      fs.writeFileSync(
+        path.join(logsDir, fileName),
+        JSON.stringify(meta, null, 2)
+      )
+    } catch (fileErr) {
+      this.debugError('downloadLogs failed to save response file', fileErr)
     }
   }
 
