@@ -85,10 +85,10 @@ class LogCoreManager {
     const discovery = this._netFac.swarm.join(core.discoveryKey, { server: true, client: false })
     await discovery.flushed()
 
-    // Auto-cleanup after TTL
+    // Auto-cleanup after TTL. unref() so a pending timer does not prevent process exit.
     const timerId = setTimeout(() => {
       this.cleanup(coreKeyHex).catch(() => {})
-    }, this._ttlMs)
+    }, this._ttlMs).unref()
 
     this._cores.set(coreKeyHex, { core, discovery, timerId })
 
