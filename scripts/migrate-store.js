@@ -36,8 +36,8 @@
 const fs = require('fs')
 const path = require('path')
 
-const { MAIN_DB } = require('miningos-tpl-wrk-thing/workers/lib/constants')
-const { getLogName } = require('miningos-tpl-wrk-thing/workers/lib/wrk-fun-logs')
+const { MAIN_DB } = require('@tetherto/miningos-tpl-wrk-thing/workers/lib/constants')
+const { getLogName } = require('@tetherto/miningos-tpl-wrk-thing/workers/lib/wrk-fun-logs')
 
 const MAIN_SUBS = ['things', 'meta_logs_00', 'settings']
 
@@ -63,7 +63,7 @@ function usage () {
 // corestore version reads/writes the right on-disk format.
 function loadFacility (storeDir) {
   const repoRoot = path.resolve(storeDir, '..', '..')
-  const modPath = path.join(repoRoot, 'node_modules', 'hp-svc-facs-store')
+  const modPath = path.join(repoRoot, 'node_modules', '@tetherto/hp-svc-facs-store')
   if (!fs.existsSync(modPath)) {
     throw new Error(`hp-svc-facs-store not found for ${storeDir} (looked in ${modPath})`)
   }
