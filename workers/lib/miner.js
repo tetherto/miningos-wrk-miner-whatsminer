@@ -341,7 +341,7 @@ class WhatsminerMiner extends BaseMiner {
   async downloadLogs () {
     try {
       const result = await this._requestDownloadLogs()
-      const { logBuffer, logFileLen } = result
+      const { logBuffer } = result
 
       // Serve the raw binary via Hypercore/Hyperswarm (data plane).
       // Only tiny metadata is returned through HRPC (signal plane).
