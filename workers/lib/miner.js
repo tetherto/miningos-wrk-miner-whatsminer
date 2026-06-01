@@ -222,30 +222,49 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   async _requestDownloadLogs () {
-    if (!this.token) {
-      await this._refreshToken()
+    const TOKEN_EXPIRED_CODE = 135
+    const MAX_ATTEMPTS = 2
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      if (!this.token) {
+        await this._refreshToken()
+      }
+
+      const downloadCmd = this.protocolHandler.transformCommand('download_logs')
+      let encCmd, decryptionKey
+
+      if (this.apiVersion === API_VERSIONS.V3) {
+        const tokenInfo = this.protocolHandler.generateTokenInfo(downloadCmd)
+        const { token, key } = tokenInfo
+        const ts = Math.floor(Date.now() / 1000)
+        const cmd = JSON.stringify({ cmd: downloadCmd, ts, token, account: 'super' })
+        const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
+        encCmd = JSON.stringify({ enc: 1, data })
+        decryptionKey = key
+      } else {
+        const tokenInfo = this.protocolHandler.getTokenInfo()
+        const { sign, key } = tokenInfo
+        const cmd = JSON.stringify({ token: sign, cmd: downloadCmd })
+        const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
+        encCmd = JSON.stringify({ enc: 1, data })
+        decryptionKey = key
+      }
+
+      try {
+        return await this._socketDownloadLogs(encCmd, decryptionKey)
+      } catch (err) {
+        // V2 tokens expire mid-session; clear and retry once with a fresh token.
+        // V3 generates per-command tokens so expiry cannot occur there.
+        if (err.responseCode === TOKEN_EXPIRED_CODE && attempt === 0 && this.apiVersion !== API_VERSIONS.V3) {
+          this.token = undefined
+          continue
+        }
+        throw err
+      }
     }
+  }
 
-    const downloadCmd = this.protocolHandler.transformCommand('download_logs')
-    let encCmd, decryptionKey
-
-    if (this.apiVersion === API_VERSIONS.V3) {
-      const tokenInfo = this.protocolHandler.generateTokenInfo(downloadCmd)
-      const { token, key } = tokenInfo
-      const ts = Math.floor(Date.now() / 1000)
-      const cmd = JSON.stringify({ cmd: downloadCmd, ts, token, account: 'super' })
-      const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
-      encCmd = JSON.stringify({ enc: 1, data })
-      decryptionKey = key
-    } else {
-      const tokenInfo = this.protocolHandler.getTokenInfo()
-      const { sign, key } = tokenInfo
-      const cmd = JSON.stringify({ token: sign, cmd: downloadCmd })
-      const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
-      encCmd = JSON.stringify({ enc: 1, data })
-      decryptionKey = key
-    }
-
+  _socketDownloadLogs (encCmd, decryptionKey) {
     return new Promise((resolve, reject) => {
       const socket = new net.Socket()
       let phase = 'text'
@@ -277,7 +296,10 @@ class WhatsminerMiner extends BaseMiner {
           const isOk = this.protocolHandler.isResponseOK(resp)
           if (!isOk) {
             socket.destroy()
-            reject(new Error(`ERR_DOWNLOAD_LOGS_FAILED: Code ${resp.Code || resp.code}`))
+            const code = resp.Code || resp.code
+            const err = new Error(`ERR_DOWNLOAD_LOGS_FAILED: Code ${code}`)
+            err.responseCode = code
+            reject(err)
             return
           }
 
