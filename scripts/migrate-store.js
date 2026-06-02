@@ -63,9 +63,12 @@ function usage () {
 // corestore version reads/writes the right on-disk format.
 function loadFacility (storeDir) {
   const repoRoot = path.resolve(storeDir, '..', '..')
-  const modPath = path.join(repoRoot, 'node_modules', '@tetherto/hp-svc-facs-store')
+  let modPath = path.join(repoRoot, 'node_modules', '@tetherto/hp-svc-facs-store')
   if (!fs.existsSync(modPath)) {
-    throw new Error(`hp-svc-facs-store not found for ${storeDir} (looked in ${modPath})`)
+    modPath = path.join(repoRoot, 'node_modules', 'hp-svc-facs-store')
+    if (!fs.existsSync(modPath)) {
+      throw new Error(`hp-svc-facs-store not found for ${storeDir} (looked in ${modPath})`)
+    }
   }
   return require(modPath)
 }
