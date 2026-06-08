@@ -18,7 +18,7 @@ const SALT = '5QAHiKMb'
 /**
  * Generates encryption key from password (V2 - MD5 based)
  */
-const generateEncryptionKey = (password) => {
+const generateEncryptionKeyV2 = (password) => {
   const key = md5.crypt(password, SALT)
   const arr = key.split('$')
   return arr[arr.length - 1]
