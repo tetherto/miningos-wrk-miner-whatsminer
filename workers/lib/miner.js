@@ -3,25 +3,28 @@
 const BaseMiner = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/base')
 const async = require('async')
 const net = require('node:net')
+const fs = require('node:fs')
+const path = require('node:path')
 const CryptoJS = require('crypto-js')
-const md5 = require('./utils/md5')
 const hex2a = require('./utils/hex2a')
 const readFirmware = require('./utils/firmware')
-const { getErrorMsg, getAPICodeMsg } = require('./utils')
+const { getErrorMsg } = require('./utils')
 const {
   MINOR_ERROR_CODES_M56S_M30_SET,
   MINOR_ERROR_CODES_M53_SET,
   MINER_COOLING_TYPE_MAP
 } = require('./constants')
 const { STATUS, POWER_MODE } = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/constants')
+const { ApiHandlerFactory, API_VERSIONS } = require('./protocols')
 
 function isResOK (res) {
   return res?.Code === 131
 }
 
 class WhatsminerMiner extends BaseMiner {
-  constructor ({ socketer, ...opts }) {
+  constructor ({ socketer, apiVersion, getLogCoreManager, ...opts }) {
     super(opts)
+    this._getLogCoreManager = getLogCoreManager || (() => null)
 
     this.rpc = socketer.rpc({
       tcpOpts: {
@@ -35,8 +38,69 @@ class WhatsminerMiner extends BaseMiner {
       delay: this.conf.delay || 50
     })
 
+    this.apiVersion = apiVersion || null
+    this.protocolHandler = null
     this._cachedPrevHashrate = null
     this.cachedShares = { accepted: 0, rejected: 0, stale: 0 }
+  }
+
+  /**
+   * Initializes the miner with API version detection if not provided
+   */
+  async init () {
+    if (!this.apiVersion) {
+      this.apiVersion = await this._detectApiVersion()
+    }
+
+    this.protocolHandler = ApiHandlerFactory.create(this.apiVersion, {
+      rpc: this.rpc,
+      password: this.opts.password,
+      debugError: this.debugError.bind(this)
+    })
+  }
+
+  /**
+   * Detects the API version by attempting to connect on known ports/commands
+   * @returns {Promise<string>}
+   */
+  async _detectApiVersion () {
+    if (this.opts.port === 4433) {
+      return API_VERSIONS.V3
+    }
+    if (this.opts.port === 4028) {
+      return API_VERSIONS.V2
+    }
+
+    const detectors = [
+      { version: API_VERSIONS.V2, cmd: 'get_token' },
+      { version: API_VERSIONS.V3, cmd: 'get.device.info' }
+    ]
+
+    for (const { version, cmd } of detectors) {
+      try {
+        const res = await this._execCommand(cmd)
+        if (res && !res.error && res.Msg) {
+          return version
+        }
+      } catch (e) {
+        this.debugError(`Version detection failed for ${version}:`, e.message)
+      }
+    }
+
+    // Default to V2 if detection fails
+    this.debugError('API version detection failed, defaulting to V2')
+    return API_VERSIONS.V2
+  }
+
+  /**
+   * Executes a command for version detection
+   * @param {string} command
+   * @returns {Promise<Object>}
+   */
+  async _execCommand (command) {
+    const cmd = { cmd: command }
+    const response = await this.rpc.request(JSON.stringify(cmd))
+    return JSON.parse(response)
   }
 
   async close () {
@@ -44,31 +108,32 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   async _getToken () {
-    const res = await this._requestReadEndpoint('get_token')
-
-    // check error code for the new firmware update v#20230911.12
-    if (res?.Code === 136) {
-      throw new Error('ERR_TOKEN_FETCH_IP_LIMIT')
-    }
-
-    const key = md5.crypt(this.opts.password, res.Msg.salt)
-    const arr = key.split('$')
-    const sign = md5.crypt(arr[arr.length - 1] + res.Msg.time, res.Msg.newsalt)
-    const tmp = sign.split('$')
-    const token = `${res.Msg.time},${res.Msg.newsalt},` + tmp[tmp.length - 1]
-    return {
-      token,
-      sign: tmp[tmp.length - 1],
-      key: arr[arr.length - 1]
-    }
+    return this.protocolHandler.authenticate()
   }
 
   async _refreshToken () {
     try {
-      this.token = await this._getToken()
+      await this.protocolHandler.refreshToken()
     } catch (e) {
       this.debugError('_refreshToken error', e)
       throw e
+    }
+  }
+
+  /**
+   * Gets the current token info from the protocol handler
+   * @returns {{token: string, sign: string, key: string}|undefined}
+   */
+  get token () {
+    return this.protocolHandler?.getTokenInfo()
+  }
+
+  /**
+   * Sets/clears the token (for backwards compatibility)
+   */
+  set token (value) {
+    if (value === undefined && this.protocolHandler) {
+      this.protocolHandler.clearToken()
     }
   }
 
@@ -111,86 +176,38 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   async _requestReadEndpoint (command, additionalParams = {}) {
-    const cmd = {
-      cmd: command,
-      ...additionalParams
-    }
-    this.debugError(`Sending command ${JSON.stringify(cmd)}`)
-    try {
-      const res = await this._requestMiner(cmd)
-      this.debugError(`Received response ${JSON.stringify(res)}`)
-      return res
-    } catch (error) {
-      this.debugError(error)
-      throw new Error('ERR_READ_FAILED')
-    }
-  }
-
-  async _requestWriteEndpoint (command, additionalParams = {}, json = true) {
-    let retry = 0
-    let err = null
-
-    while (retry < 3) {
-      try {
-        if (this.token === undefined) {
-          await this._refreshToken()
-        }
-        const { sign, key } = this.token
-        const cmd = JSON.stringify({
-          token: sign,
-          cmd: command,
-          ...additionalParams
-        })
-        this.debugError(`Sending command ${cmd}`)
-        const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
-        const encCmd = {
-          enc: 1,
-          data
-        }
-
-        const res = await this._requestMiner(encCmd, json)
-
-        // cases when we only need to write to miner,and there is no response, for e.g: reboot
-        if (res.length === 0) {
-          return null
-        }
-        if (!res.enc) {
-          this.debugError(`Received response ${JSON.stringify(res)}`)
-          throw new Error(getAPICodeMsg(res))
-        }
-
-        const decrypted = CryptoJS.AES.decrypt(res.enc, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
-        const response = JSON.parse(hex2a(decrypted))
-        if (response.Code === 135) {
-          // Retry with fresh token
-          this.token = undefined
-          retry++
-          continue
-        }
-        this.debugError(`Received response ${JSON.stringify(response)}`)
-        return response
-      } catch (e) {
-        err = e
-        this.token = undefined
-        retry++
+    const cmd = this.protocolHandler.transformCommand(command)
+    const params = { ...additionalParams }
+    if (this.protocolHandler.getStatusParam) {
+      const statusParam = this.protocolHandler.getStatusParam(command)
+      if (statusParam) {
+        params.param = statusParam
       }
     }
 
-    if (err) {
-      this.debugError('write_err', err)
-      throw err
-    }
-    return null
+    const res = await this.protocolHandler.requestRead(cmd, params)
+    this.updateLastSeen()
+    return this.protocolHandler.parseResponse(res, command)
+  }
+
+  async _requestWriteEndpoint (command, additionalParams = {}, json = true) {
+    const cmd = this.protocolHandler.transformCommand(command)
+    const res = await this.protocolHandler.requestWrite(cmd, additionalParams, json)
+    this.updateLastSeen()
+    return res ? this.protocolHandler.parseResponse(res, command) : null
   }
 
   async _requestWriteFirmwareEndpoint (filename) {
-    if (this.token === undefined) {
+    // Ensure we have a valid token
+    if (!this.token) {
       await this._refreshToken()
     }
-    const { sign, key } = this.token
+    const tokenInfo = this.protocolHandler.getTokenInfo()
+    const { sign, key } = tokenInfo
+    const firmwareCmd = this.protocolHandler.transformCommand('update_firmware')
     const cmd = JSON.stringify({
       token: sign,
-      cmd: 'update_firmware'
+      cmd: firmwareCmd
     })
     const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
     const encCmd = JSON.stringify({
@@ -204,6 +221,160 @@ class WhatsminerMiner extends BaseMiner {
     return res
   }
 
+  async _requestDownloadLogs () {
+    const TOKEN_EXPIRED_CODE = 135
+    const MAX_ATTEMPTS = 2
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      if (!this.token) {
+        await this._refreshToken()
+      }
+
+      const downloadCmd = this.protocolHandler.transformCommand('download_logs')
+      let encCmd, decryptionKey
+
+      if (this.apiVersion === API_VERSIONS.V3) {
+        const tokenInfo = this.protocolHandler.generateTokenInfo(downloadCmd)
+        const { token, key } = tokenInfo
+        const ts = Math.floor(Date.now() / 1000)
+        const cmd = JSON.stringify({ cmd: downloadCmd, ts, token, account: 'super' })
+        const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
+        encCmd = JSON.stringify({ enc: 1, data })
+        decryptionKey = key
+      } else {
+        const tokenInfo = this.protocolHandler.getTokenInfo()
+        const { sign, key } = tokenInfo
+        const cmd = JSON.stringify({ token: sign, cmd: downloadCmd })
+        const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
+        encCmd = JSON.stringify({ enc: 1, data })
+        decryptionKey = key
+      }
+
+      try {
+        return await this._socketDownloadLogs(encCmd, decryptionKey)
+      } catch (err) {
+        // V2 tokens expire mid-session; clear and retry once with a fresh token.
+        // V3 generates per-command tokens so expiry cannot occur there.
+        if (err.responseCode === TOKEN_EXPIRED_CODE && attempt === 0 && this.apiVersion !== API_VERSIONS.V3) {
+          this.token = undefined
+          continue
+        }
+        throw err
+      }
+    }
+  }
+
+  _socketDownloadLogs (encCmd, decryptionKey) {
+    return new Promise((resolve, reject) => {
+      const socket = new net.Socket()
+      let phase = 'text'
+      let logFileLen = 0
+      const chunks = []
+      let receivedLen = 0
+
+      socket.connect(this.opts.port, this.opts.address, () => {
+        socket.write(encCmd)
+      })
+
+      socket.on('data', (data) => {
+        if (phase === 'text') {
+          let resp
+          try {
+            const decoded = JSON.parse(data.toString())
+            if (decoded.enc) {
+              const decrypted = CryptoJS.AES.decrypt(decoded.enc, CryptoJS.SHA256(decryptionKey), { mode: CryptoJS.mode.ECB }).toString()
+              resp = JSON.parse(hex2a(decrypted))
+            } else {
+              resp = decoded
+            }
+          } catch (e) {
+            socket.destroy()
+            reject(new Error('ERR_DOWNLOAD_LOGS_PARSE_FAILED'))
+            return
+          }
+
+          const isOk = this.protocolHandler.isResponseOK(resp)
+          if (!isOk) {
+            socket.destroy()
+            const code = resp.Code || resp.code
+            const err = new Error(`ERR_DOWNLOAD_LOGS_FAILED: Code ${code}`)
+            err.responseCode = code
+            reject(err)
+            return
+          }
+
+          const msg = resp.Msg || resp.msg || {}
+          logFileLen = parseInt(msg.logfilelen || msg.logsize || '0')
+          if (!logFileLen || logFileLen <= 0) {
+            socket.destroy()
+            reject(new Error('ERR_DOWNLOAD_LOGS_EMPTY'))
+            return
+          }
+          phase = 'binary'
+        } else {
+          chunks.push(data)
+          receivedLen += data.length
+          if (receivedLen >= logFileLen) {
+            socket.destroy()
+            const logBuffer = Buffer.concat(chunks, logFileLen)
+            resolve({ logFileLen, logBuffer })
+          }
+        }
+      })
+
+      socket.on('end', () => {
+        if (phase === 'binary' && chunks.length > 0) {
+          const logBuffer = Buffer.concat(chunks)
+          resolve({ logFileLen: logBuffer.length, logBuffer })
+        }
+      })
+
+      socket.on('error', (error) => { reject(error) })
+
+      socket.setTimeout(60000, () => {
+        socket.destroy()
+        reject(new Error('ERR_DOWNLOAD_LOGS_TIMEOUT'))
+      })
+    })
+  }
+
+  async downloadLogs () {
+    try {
+      const result = await this._requestDownloadLogs()
+      const { logBuffer } = result
+
+      // Serve the raw binary via Hypercore/Hyperswarm (data plane).
+      // Only tiny metadata is returned through HRPC (signal plane).
+      const logCoreManager = this._getLogCoreManager()
+      if (!logCoreManager) throw new Error('ERR_LOG_CORE_MANAGER_NOT_READY')
+      const meta = await logCoreManager.serveLog(logBuffer, this.opts.id)
+
+      // Also write a local debug file (metadata only, not raw bytes)
+      this._saveResponseFile(meta)
+
+      return { success: true, data: meta }
+    } catch (e) {
+      this.debugError('downloadLogs error', e)
+      return { success: false, error_msg: e.message }
+    }
+  }
+
+  _saveResponseFile (meta) {
+    try {
+      const logsDir = path.join(process.cwd(), 'logs')
+      if (!fs.existsSync(logsDir)) {
+        fs.mkdirSync(logsDir, { recursive: true })
+      }
+      const fileName = `download-logs-${this.opts.id || this.opts.address}-${Date.now()}.txt`
+      fs.writeFileSync(
+        path.join(logsDir, fileName),
+        JSON.stringify(meta, null, 2)
+      )
+    } catch (fileErr) {
+      this.debugError('downloadLogs failed to save response file', fileErr)
+    }
+  }
+
   validateWriteAction (...params) {
     const [action, ...args] = params
 
@@ -212,6 +383,10 @@ class WhatsminerMiner extends BaseMiner {
       if (!['low', 'normal', 'high', 'sleep'].includes(mode)) {
         throw new Error('ERR_SET_POWER_MODE_INVALID')
       }
+      return 1
+    }
+
+    if (action === 'downloadLogs') {
       return 1
     }
 
@@ -227,47 +402,81 @@ class WhatsminerMiner extends BaseMiner {
       whatsminer: {
         api: res.Msg.api_ver,
         firmware: res.Msg.fw_ver
-      }
+      },
+      apiVersion: this.apiVersion
+    }
+  }
+
+  async getMinerStatus () {
+    const res = await this._requestReadEndpoint('status')
+
+    if (!res?.Msg || typeof res.Msg !== 'object') {
+      return null
+    }
+
+    const msg = res.Msg
+    const liquidTemp = parseFloat(msg.liquid_temp)
+    const powerPct = parseFloat(msg.power_pct)
+    return {
+      mineroff: msg.mineroff === 'true',
+      mineroff_reason: msg.mineroff_reason || '',
+      mineroff_time: msg.mineroff_time || '',
+      firmware_version: msg.FirmwareVersion || '',
+      power_mode: msg.power_mode || '',
+      power_limit_set: msg.power_limit_set || '',
+      hash_percent: msg.hash_percent || '0',
+      fast_mining: msg.fast_mining === 'true',
+      fast_hash: msg.fast_hash === 'true',
+      liquid_temp: !isNaN(liquidTemp) ? liquidTemp : 0,
+      power_pct: !isNaN(powerPct) ? powerPct : 100
     }
   }
 
   async getMinerStats () {
     const res = await this._requestReadEndpoint('summary')
+
+    if (!res?.SUMMARY?.[0]) {
+      const errorMsg = res?.Msg || 'Unknown error'
+      const errorCode = res?.Code || 0
+      throw new Error(`ERR_MINER_STATS_FAILED: ${errorMsg} (Code: ${errorCode})`)
+    }
+
+    const summary = res.SUMMARY[0]
     const processedStats = {
-      elapsed: res.SUMMARY[0].Elapsed,
-      mhs_av: res.SUMMARY[0]['MHS av'],
-      mhs_5s: res.SUMMARY[0]['MHS 5s'],
-      mhs_1m: res.SUMMARY[0]['MHS 1m'],
-      mhs_5m: res.SUMMARY[0]['MHS 5m'],
-      mhs_15m: res.SUMMARY[0]['MHS 15m'],
+      elapsed: summary.Elapsed,
+      mhs_av: summary['MHS av'],
+      mhs_5s: summary['MHS 5s'],
+      mhs_1m: summary['MHS 1m'],
+      mhs_5m: summary['MHS 5m'],
+      mhs_15m: summary['MHS 15m'],
       prev_mhs: this._cachedPrevHashrate,
-      hs_rt: res.SUMMARY[0]['HS RT'],
-      accepted: res.SUMMARY[0].Accepted,
-      rejected: res.SUMMARY[0].Rejected,
-      total_mh: res.SUMMARY[0]['Total MH'],
-      temperature: res.SUMMARY[0].Temperature,
-      freq_avg: res.SUMMARY[0].freq_avg,
-      fan_speed_in: res.SUMMARY[0]['Fan Speed In'],
-      fan_speed_out: res.SUMMARY[0]['Fan Speed Out'],
-      power: res.SUMMARY[0].Power,
-      power_rate: res.SUMMARY[0]['Power Rate'],
-      pool_rejected: res.SUMMARY[0]['Pool Rejected%'],
-      pool_stale: res.SUMMARY[0]['Pool Stale%'],
-      uptime: res.SUMMARY[0].Uptime,
-      hash_stable: res.SUMMARY[0]['Hash Stable'],
-      hash_stable_cost_seconds: res.SUMMARY[0]['Hash Stable Cost Seconds'],
-      hash_deviation: res.SUMMARY[0]['Hash Deviation%'],
-      target_freq: res.SUMMARY[0]['Target Freq'],
-      target_mhs: res.SUMMARY[0]['Target MHS'],
-      env_temp: res.SUMMARY[0]['Env Temp'],
-      power_mode: res.SUMMARY[0]['Power Mode'],
-      factory_ghs: res.SUMMARY[0]['Factory GHS'],
-      power_limit: res.SUMMARY[0]['Power Limit'],
-      chip_temp_min: res.SUMMARY[0]['Chip Temp Min'],
-      chip_temp_max: res.SUMMARY[0]['Chip Temp Max'],
-      chip_temp_avg: res.SUMMARY[0]['Chip Temp Avg'],
-      debug: res.SUMMARY[0].Debug,
-      btminer_fast_boot: res.SUMMARY[0]['Btminer Fast Boot']
+      hs_rt: summary['HS RT'],
+      accepted: summary.Accepted,
+      rejected: summary.Rejected,
+      total_mh: summary['Total MH'],
+      temperature: summary.Temperature,
+      freq_avg: summary.freq_avg,
+      fan_speed_in: summary['Fan Speed In'],
+      fan_speed_out: summary['Fan Speed Out'],
+      power: summary.Power,
+      power_rate: summary['Power Rate'],
+      pool_rejected: summary['Pool Rejected%'],
+      pool_stale: summary['Pool Stale%'],
+      uptime: summary.Uptime,
+      hash_stable: summary['Hash Stable'],
+      hash_stable_cost_seconds: summary['Hash Stable Cost Seconds'],
+      hash_deviation: summary['Hash Deviation%'],
+      target_freq: summary['Target Freq'],
+      target_mhs: summary['Target MHS'],
+      env_temp: summary['Env Temp'],
+      power_mode: summary['Power Mode'],
+      factory_ghs: summary['Factory GHS'],
+      power_limit: summary['Power Limit'],
+      chip_temp_min: summary['Chip Temp Min'],
+      chip_temp_max: summary['Chip Temp Max'],
+      chip_temp_avg: summary['Chip Temp Avg'],
+      debug: summary.Debug,
+      btminer_fast_boot: summary['Btminer Fast Boot']
     }
 
     this._cachedPrevHashrate = processedStats.mhs_5m
@@ -669,8 +878,14 @@ class WhatsminerMiner extends BaseMiner {
     }
   }
 
-  async updateFirmware (firmware) {
+  async searchFirmwareById (id) {
+    if (!this.opts?.findFirmware) throw new Error('ERR_FIRMWARE_LOOKUP_NOT_AVAILABLE')
+    return await this.opts.findFirmware(id)
+  }
+
+  async updateFirmware (firmwareId) {
     try {
+      const firmware = await this.searchFirmwareById(firmwareId)
       const res = await this._requestWriteFirmwareEndpoint(firmware)
       return { data: res }
     } catch (e) {
@@ -737,7 +952,8 @@ class WhatsminerMiner extends BaseMiner {
       devices: this.getDevices.bind(this),
       errors: this.getErrors.bind(this),
       miner_info: this.getMinerInfo.bind(this),
-      version: this.getVersion.bind(this)
+      version: this.getVersion.bind(this),
+      miner_status: this.getMinerStatus.bind(this)
     }, 3)
 
     this._handleErrorUpdates(data.errors)
@@ -785,7 +1001,12 @@ class WhatsminerMiner extends BaseMiner {
           }))
         },
         miner_specific: {
-          upfreq_speed: data.miner_info.upfreq_speed ? parseFloat(data.miner_info.upfreq_speed) : undefined
+          upfreq_speed: data.miner_info.upfreq_speed ? parseFloat(data.miner_info.upfreq_speed) : undefined,
+          fast_mining: data.miner_status?.fast_mining || false,
+          fast_hash: data.miner_status?.fast_hash || false,
+          hash_percent: data.miner_status?.hash_percent || '0',
+          liquid_temp: data.miner_status?.liquid_temp || 0,
+          power_pct: data.miner_status?.power_pct || 100
         }
       },
       config: {
@@ -800,10 +1021,11 @@ class WhatsminerMiner extends BaseMiner {
           url: pool.url,
           username: pool.user
         })),
-        power_mode: this._getPowerMode(data.stats),
-        suspended: this._isSuspended(data.stats),
+        power_mode: data.miner_status?.power_mode || this._getPowerMode(data.stats),
+        suspended: data.miner_status ? data.miner_status.mineroff : this._isSuspended(data.stats),
         led_status: data.miner_info.ledstat !== 'auto',
-        firmware_ver: data.version.whatsminer.firmware
+        firmware_ver: data.version.whatsminer.firmware,
+        api_version: this.apiVersion
       }
     }
   }

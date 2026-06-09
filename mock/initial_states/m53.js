@@ -32,7 +32,7 @@ module.exports = function (ctx) {
       vendor: '1',
       temp0: '0'
     },
-    version: libUtils.createVersion('H3LA02-22101901 T BINV02-196802D'),
+    version: libUtils.createVersion('H3LA02-22101901 T BINV02-196802D', ctx.apiVersion === 'v3' ? '3.0.3' : '2.0.5'),
     pools: libUtils.createPools()
   }
 

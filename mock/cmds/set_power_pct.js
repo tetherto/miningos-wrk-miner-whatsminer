@@ -8,6 +8,7 @@ const args = [[
 
 module.exports = function (ctx, state, req) {
   if (validateArgs(args, req)) {
+    state.power_pct = Number(req.percent)
     return createSuccessResponse()
   } else {
     return createErrorResponse()

@@ -6,21 +6,40 @@ const path = require('path')
 const yargs = require('yargs/yargs')
 const { hideBin } = require('yargs/helpers')
 const debug = require('debug')('mock')
+const CryptoJS = require('crypto-js')
 const { decryptCommand, encryptResponse } = require('./utils')
 const MockControlAgent = require('./mock-control-agent')
 const { promiseSleep } = require('@bitfinex/lib-js-util-promise')
 const md5 = require('../workers/lib/utils/md5')
 
-const MINER_TYPES = ['m63', 'm56s', 'm53s', 'm30sp', 'm30spp']
+const MINER_TYPES = ['m63', 'm56s', 'm53s', 'm30sp', 'm30spp', 'm63spp']
 const SALT = '5QAHiKMb'
 
 /**
- * Generates encryption key from password
+ * Generates encryption key from password (V2 - MD5 based)
  */
-const generateEncryptionKey = (password) => {
+const generateEncryptionKeyV2 = (password) => {
   const key = md5.crypt(password, SALT)
   const arr = key.split('$')
   return arr[arr.length - 1]
+}
+
+/**
+ * Generates encryption key from password (V3 - SHA256 based)
+ */
+const generateEncryptionKeyV3 = (password) => {
+  // V3 uses SHA256(password + salt)
+  return CryptoJS.SHA256(password + SALT).toString()
+}
+
+/**
+ * Generates encryption key based on API version
+ */
+const generateEncryptionKey = (password, apiVersion) => {
+  if (apiVersion === 'v3') {
+    return generateEncryptionKeyV3(password)
+  }
+  return generateEncryptionKeyV2(password)
 }
 
 /**
@@ -103,6 +122,7 @@ if (require.main === module) {
     .option('error', { description: 'send errored response', type: 'boolean', default: false })
     .option('minerpoolMockPort', { type: 'number', description: 'minerpool mock port', default: 8000 })
     .option('minerpoolMockHost', { type: 'string', description: 'minerpool mock host', default: '127.0.0.1' })
+    .option('apiVersion', { description: 'API version (v2 or v3)', type: 'string', default: 'v2' })
     .parse()
 
   const things = argv.bulk ? JSON.parse(fs.readFileSync(argv.bulk)) : [argv]
@@ -110,13 +130,16 @@ if (require.main === module) {
   agent.init(runServer)
 } else {
   module.exports = {
-    createServer ({ port, host, type, serial, password }) {
-      return runServer({ port, host, type, serial, password })
+    createServer ({ port, host, type, serial, password, apiVersion }) {
+      return runServer({ port, host, type, serial, password, apiVersion })
     }
   }
 }
 
 function runServer (argv, ops = {}) {
+  const apiVersion = argv.apiVersion || 'v2'
+  const defaultPassword = apiVersion === 'v3' ? 'super' : 'admin'
+
   const CTX = {
     host: argv.host,
     port: argv.port,
@@ -126,12 +149,13 @@ function runServer (argv, ops = {}) {
     error: argv.error,
     minerpoolMockPort: argv.minerpoolMockPort,
     minerpoolMockHost: argv.minerpoolMockHost,
-    password: argv.password || 'admin'
+    password: argv.password || defaultPassword,
+    apiVersion
   }
 
   const STATE = {}
   const validTokens = new Set()
-  const encryptionKey = generateEncryptionKey(CTX.password)
+  const encryptionKey = generateEncryptionKey(CTX.password, CTX.apiVersion)
 
   // Add validTokens to CTX so commands can add tokens
   CTX.validTokens = validTokens
@@ -141,8 +165,8 @@ function runServer (argv, ops = {}) {
     throw Error('ERR_UNSUPPORTED')
   }
 
-  // Load initial state
-  const statePaths = ['./initial_states/default', `./initial_states/${CTX.type.toLowerCase()}`]
+  // Load initial state (model-specific takes priority over default)
+  const statePaths = [`./initial_states/${CTX.type.toLowerCase()}`, './initial_states/default']
   const statePath = findExistingPath(statePaths)
 
   if (!statePath) {
@@ -156,7 +180,7 @@ function runServer (argv, ops = {}) {
     throw Error('ERR_INVALID_STATE')
   }
 
-  const processCmd = async (socket, chunk) => {
+  const processCmd = async (socket, chunk, socketCtx) => {
     const req = JSON.parse(chunk.toString())
     const id = req.ctx?.mockControl?.generateId()
     const isEncrypted = req.enc === 1
@@ -189,7 +213,22 @@ function runServer (argv, ops = {}) {
 
     // Find and execute command
     const command = cmd.cmd || cmd.command || null
-    const cmdPaths = [`./cmds/${command}`, `./cmds/${CTX.type}/${command}`]
+
+    // Build command paths based on API version
+    // For V3, first try cmds-v3/, then fall back to cmds/ (with underscore conversion)
+    let cmdPaths
+    if (CTX.apiVersion === 'v3') {
+      // Try V3 specific commands first, then fall back to V2 commands
+      const v2Command = command.replace(/\./g, '_') // Convert dot notation to underscore for fallback
+      cmdPaths = [
+        `./cmds-v3/${command}`,
+        `./cmds-v3/${CTX.type}/${command}`,
+        `./cmds/${v2Command}`,
+        `./cmds/${CTX.type}/${v2Command}`
+      ]
+    } else {
+      cmdPaths = [`./cmds/${command}`, `./cmds/${CTX.type}/${command}`]
+    }
     const cmdPath = findExistingPath(cmdPaths)
 
     if (!cmdPath) {
@@ -201,6 +240,40 @@ function runServer (argv, ops = {}) {
 
       // If null, do nothing (reboot)
       if (res === null) {
+        return
+      }
+
+      // Handle two-phase responses (e.g., download_logs)
+      // The command handler attaches _binaryPayload for data that should be
+      // sent as raw bytes after the JSON response (matching real hardware behavior)
+      if (res._binaryPayload) {
+        const binaryData = res._binaryPayload
+        delete res._binaryPayload
+
+        if (CTX.delay) await promiseSleep(CTX.delay)
+
+        if (isEncrypted) {
+          socket.write(encryptResponse(res, encryptionKey))
+        } else {
+          socket.write(JSON.stringify(res))
+        }
+
+        await promiseSleep(10)
+        socket.write(binaryData)
+        socket.destroy()
+        return
+      }
+
+      // Firmware transfer: respond with "ready" and keep socket open to receive binary data
+      if (res.__firmwareReady) {
+        const readyResp = { STATUS: 'S', When: +new Date(), Code: 131, Msg: 'ready', Description: '' }
+        if (isEncrypted) {
+          socket.write(encryptResponse(readyResp, encryptionKey))
+        } else {
+          socket.write(JSON.stringify(readyResp))
+        }
+        socketCtx.firmwareMode = true
+        socketCtx.isEncrypted = isEncrypted
         return
       }
 
@@ -221,8 +294,26 @@ function runServer (argv, ops = {}) {
   server.on('connection', function (socket) {
     debug(new Date(), 'Connection from ' + socket.remoteAddress + ':' + socket.remotePort)
 
+    const socketCtx = { firmwareMode: false, isEncrypted: false, buffer: Buffer.alloc(0), expectedSize: null }
+
     socket.on('data', async function (chunk) {
-      await processCmd(socket, chunk)
+      if (socketCtx.firmwareMode) {
+        socketCtx.buffer = Buffer.concat([socketCtx.buffer, chunk])
+
+        if (socketCtx.expectedSize === null && socketCtx.buffer.length >= 4) {
+          socketCtx.expectedSize = socketCtx.buffer.readInt32LE(0)
+          socketCtx.buffer = socketCtx.buffer.subarray(4)
+        }
+
+        if (socketCtx.expectedSize !== null && socketCtx.buffer.length >= socketCtx.expectedSize) {
+          socketCtx.firmwareMode = false
+          const resp = { STATUS: 'S', When: +new Date(), Code: 131, Msg: 'Updated', Description: '' }
+          await sendResponse(socket, resp, encryptionKey, socketCtx.isEncrypted, CTX.delay)
+        }
+        return
+      }
+
+      await processCmd(socket, chunk, socketCtx)
     })
   })
 

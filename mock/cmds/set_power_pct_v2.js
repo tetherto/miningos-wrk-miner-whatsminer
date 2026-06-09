@@ -13,6 +13,7 @@ module.exports = function (ctx, state, req) {
       return createErrorResponse(132, 'API command ERROR')
     }
     if (percent) {
+      state.power_pct = Number(percent)
       state.summary['Power Limit'] = state.summary['Power Limit'] * Number(percent) / 100
       state.summary['Target Freq'] = state.summary['Target Freq'] * Number(percent) / 100
     }

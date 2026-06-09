@@ -1,5 +1,7 @@
 'use strict'
 
+const { API_VERSIONS, API_DEFAULTS } = require('./protocols/constants')
+
 const MINOR_ERROR_CODES_M56S_M30_SET = new Set(
   [203, 204, 205, 206, 217, 219, 236, 248, 270, 275, 320, 321, 322, 620, 714, 901, 2320, 2330, 2350, 5140, 5141]
 )
@@ -13,12 +15,13 @@ const DEFAULT_NOMINAL_EFFICIENCY_WTHS = {
   'miner-wm-m30spp': 33,
   'miner-wm-m53s': 26,
   'miner-wm-m56s': 26,
-  'miner-wm-m63': 26
+  'miner-wm-m63': 26,
+  'miner-wm-m63spp': 26
 }
 
 const MINER_COOLING_TYPE_MAP = {
   HYDRO: ['m63', 'm53s'],
-  IMMERSION: ['m56s'],
+  IMMERSION: ['m56s', 'm63spp'],
   AIR: ['m30sp', 'm30spp']
 }
 
@@ -26,5 +29,7 @@ module.exports = {
   MINOR_ERROR_CODES_M56S_M30_SET,
   MINOR_ERROR_CODES_M53_SET,
   DEFAULT_NOMINAL_EFFICIENCY_WTHS,
-  MINER_COOLING_TYPE_MAP
+  MINER_COOLING_TYPE_MAP,
+  API_VERSIONS,
+  API_DEFAULTS
 }
