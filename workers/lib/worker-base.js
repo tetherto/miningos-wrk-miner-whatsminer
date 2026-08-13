@@ -112,7 +112,10 @@ class WrkMinerRack extends WrkRack {
       return 0
     }
 
-    const apiVersion = thg.opts.apiVersion || thg.info?.apiVersion || null
+    // Only an explicitly configured apiVersion pins the protocol; a previously
+    // auto-detected version (thg.info.apiVersion) is re-detected on connect so
+    // miners upgraded to v3 firmware are not stuck on the v2-compat API.
+    const apiVersion = thg.opts.apiVersion || null
     const port = thg.opts.port || this._getDefaultPortForVersion(apiVersion)
 
     const miner = new Miner({

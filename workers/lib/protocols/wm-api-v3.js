@@ -1,22 +1,100 @@
 'use strict'
 
+const net = require('node:net')
 const CryptoJS = require('crypto-js')
 const WMApiBase = require('./wm-api-base')
-const hex2a = require('../utils/hex2a')
-const { API_VERSIONS, API_DEFAULTS, COMMAND_MAP_V3, V3_STATUS_PARAMS, RESPONSE_CODES_V3 } = require('./constants')
+const { API_VERSIONS, API_DEFAULTS, COMMAND_MAP_V3, V3_READ_PARAMS, RESPONSE_CODES_V3 } = require('./constants')
+
+const DEFAULT_TIMEOUT_MS = 5000
+const DEVICE_INFO_CACHE_TTL_MS = 2000
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 /**
- * Protocol handler for Whatsminer API v3.0.3
- * Key differences from v2:
- * - Token generated per-command: SHA256(cmd + password + salt + ts).base64.substring(0, 8)
- * - Response format: {code, when, msg, desc} instead of {STATUS, When, Code, Msg}
- * - Response codes: 0=Success, -1=Fail, -2=Invalid command, -4=No permission
- * - Uses dot notation commands (get.miner.status with param)
+ * Sends one length-prefixed JSON request to the miner and reads one
+ * length-prefixed JSON response (official v3 TCP framing: a 4-byte
+ * little-endian length followed by the JSON payload, in both directions).
+ *
+ * @param {{address: string, port: number, timeout: number}} opts
+ * @param {Object} payload - JSON-serializable request
+ * @returns {Promise<Object>}
+ */
+function framedRequest ({ address, port, timeout }, payload) {
+  return new Promise((resolve, reject) => {
+    const socket = new net.Socket()
+    let buf = Buffer.alloc(0)
+    let expected = null
+    let settled = false
+
+    const settle = (err, res) => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      if (err) reject(err)
+      else resolve(res)
+    }
+
+    socket.setTimeout(timeout, () => settle(new Error('ERR_V3_REQUEST_TIMEOUT')))
+
+    socket.on('error', (error) => {
+      const err = new Error(`ERR_V3_REQUEST_FAILED: ${error.message}`)
+      err.code = error.code
+      settle(err)
+    })
+
+    socket.on('data', (data) => {
+      buf = buf.length ? Buffer.concat([buf, data]) : data
+      if (expected === null && buf.length >= 4) {
+        expected = buf.readUInt32LE(0)
+        if (expected > MAX_RESPONSE_BYTES) {
+          return settle(new Error('ERR_V3_RESPONSE_TOO_LARGE'))
+        }
+        buf = buf.subarray(4)
+      }
+      if (expected !== null && buf.length >= expected) {
+        try {
+          settle(null, JSON.parse(buf.subarray(0, expected).toString('utf8')))
+        } catch (e) {
+          settle(new Error('ERR_V3_RESPONSE_PARSE_FAILED'))
+        }
+      }
+    })
+
+    socket.on('end', () => settle(new Error('ERR_V3_CONNECTION_ENDED')))
+
+    socket.connect(port, address, () => {
+      const body = Buffer.from(JSON.stringify(payload), 'utf8')
+      const len = Buffer.alloc(4)
+      len.writeUInt32LE(body.length, 0)
+      socket.write(Buffer.concat([len, body]))
+    })
+  })
+}
+
+/**
+ * Protocol handler for the WhatsMiner API v3 (port 4433).
+ *
+ * Verified against the official documentation (apidoc.whatsminer.com) and a
+ * live M63S++ on firmware 20260312.16.REL3 (api 3.0.5):
+ * - Transport: 4-byte LE length-prefixed JSON frames (NOT raw JSON like v2)
+ * - Reads (get.*) need no authentication; get.miner.status requires a param
+ *   (summary | pools | edevs), get.device.info accepts a section filter
+ *   (miner | system | power | network | salt | error-code)
+ * - Hash rates are reported in TH/s (v2 uses MH/s)
+ * - Writes use a plaintext envelope {cmd, ts, token, account, param} where
+ *   token = base64(sha256(cmd + password + salt + ts)).substring(0, 8)
+ * - Response format: {code, when, msg, desc}; code 0 = success
  */
 class WMApiV3 extends WMApiBase {
   constructor (opts) {
     super(opts)
+    this.address = opts.address
+    this.port = opts.port || API_DEFAULTS[API_VERSIONS.V3].port
+    this.timeout = opts.timeout || DEFAULT_TIMEOUT_MS
     this.salt = undefined // Salt from get.device.info, used for token generation
+    this._deviceInfoCache = null // { ts, promise }
+    if (opts.deviceInfoSeed) {
+      this._seedDeviceInfo(opts.deviceInfoSeed)
+    }
   }
 
   static get VERSION () {
@@ -27,44 +105,45 @@ class WMApiV3 extends WMApiBase {
     return API_DEFAULTS[API_VERSIONS.V3].port
   }
 
+  /**
+   * One-shot probe used for API version detection. Returns the full
+   * get.device.info response or throws on connection/framing failure.
+   */
+  static async probeDeviceInfo ({ address, port, timeout }) {
+    return framedRequest({
+      address,
+      port: port || API_DEFAULTS[API_VERSIONS.V3].port,
+      timeout: timeout || DEFAULT_TIMEOUT_MS
+    }, { cmd: 'get.device.info' })
+  }
+
   getAuthCommand () {
     return API_DEFAULTS[API_VERSIONS.V3].authCommand
   }
 
+  _seedDeviceInfo (response) {
+    if (response?.code === RESPONSE_CODES_V3.SUCCESS && response.msg) {
+      this._deviceInfoCache = { ts: Date.now(), promise: Promise.resolve(response) }
+      if (response.msg.salt) this.salt = response.msg.salt
+    }
+  }
+
+  async _framedRequest (payload) {
+    return framedRequest({ address: this.address, port: this.port, timeout: this.timeout }, payload)
+  }
+
   /**
-   * V3 authentication - gets salt from get.device.info
-   * Per API 3.0.3 documentation:
-   * 1. Get salt from get.device.info
-   * 2. Token is generated PER COMMAND: SHA256(cmd + password + salt + ts).base64.substring(0, 8)
+   * V3 authentication - obtains the device salt used for per-command tokens
    */
   async authenticate () {
-    const res = await this.requestRead(this.getAuthCommand())
+    const res = await this._framedRequest({ cmd: 'get.device.info', param: 'salt' })
 
-    // Check for IP limit error (V3: -4, V2: 136)
-    if (res?.code === RESPONSE_CODES_V3.NO_PERMISSION || res?.Code === 136) {
-      throw new Error('ERR_TOKEN_FETCH_IP_LIMIT')
+    if (res?.code !== RESPONSE_CODES_V3.SUCCESS || !res.msg?.salt) {
+      throw new Error(`ERR_AUTH_FAILED_${res?.code}`)
     }
 
-    // Check for success (V3: code=0, V2: Code=131)
-    const isSuccess = res?.code === RESPONSE_CODES_V3.SUCCESS || res?.Code === 131
-    if (!isSuccess) {
-      throw new Error(`ERR_AUTH_FAILED_${res?.code || res?.Code}`)
-    }
-
-    // Get salt from response (support both V3 and V2 formats)
-    // V3: {code, when, msg: {salt, ...}, desc}
-    // V2: {STATUS, When, Code, Msg: {salt, ...}, Description}
-    const msgObj = res.msg || res.Msg || {}
-    const salt = msgObj.salt
-
-    if (!salt) {
-      throw new Error('ERR_INVALID_AUTH_RESPONSE')
-    }
-
-    // Store salt for use in per-command token generation
-    this.salt = salt
-
-    return { salt }
+    this.salt = res.msg.salt
+    return { salt: this.salt }
   }
 
   async refreshToken () {
@@ -78,30 +157,86 @@ class WMApiV3 extends WMApiBase {
 
   /**
    * Generate token for a specific command
-   * V3 token = SHA256(cmd + password + salt + ts).base64.substring(0, 8)
-   * @param {string} command - The command name
-   * @param {number} timestamp - Unix timestamp
-   * @returns {{token: string, key: string}} Token and encryption key
+   * token = base64(sha256(cmd + password + salt + ts)).substring(0, 8)
+   * The raw sha256 digest doubles as the AES-256 key for commands whose
+   * param must be encrypted (set.miner.pools, set.user.change_passwd).
+   * @param {string} command
+   * @param {number} timestamp - Unix timestamp (seconds)
+   * @returns {{token: string, key: Object}} token and AES key (WordArray)
    */
   _generateToken (command, timestamp) {
-    const tokenInput = `${command}${this.password}${this.salt}${timestamp}`
-    const tokenHash = CryptoJS.SHA256(tokenInput)
-    const tokenBase64 = tokenHash.toString(CryptoJS.enc.Base64)
-    const token = tokenBase64.substring(0, 8)
-    // Full SHA256 hash is used as AES encryption key
-    const key = tokenHash.toString()
+    const tokenHash = CryptoJS.SHA256(`${command}${this.password}${this.salt}${timestamp}`)
+    const token = tokenHash.toString(CryptoJS.enc.Base64).substring(0, 8)
+    return { token, key: tokenHash }
+  }
 
-    return { token, key }
+  /**
+   * Full get.device.info is requested by several read commands (version,
+   * miner info, status merge) — cache it briefly and dedupe in-flight calls
+   * so one snapshot triggers a single request.
+   */
+  async _getDeviceInfoCached () {
+    const now = Date.now()
+    if (this._deviceInfoCache && now - this._deviceInfoCache.ts < DEVICE_INFO_CACHE_TTL_MS) {
+      return this._deviceInfoCache.promise
+    }
+    const promise = this._framedRequest({ cmd: 'get.device.info' }).then((res) => {
+      if (res?.code === RESPONSE_CODES_V3.SUCCESS && res.msg?.salt) {
+        this.salt = res.msg.salt
+      }
+      return res
+    })
+    this._deviceInfoCache = { ts: now, promise }
+    promise.catch(() => { this._deviceInfoCache = null })
+    return promise
+  }
+
+  /**
+   * The v2 'status' command maps to get.miner.setting, but several fields
+   * (mineroff, liquid temperature, hash percent, firmware version) only
+   * exist in get.device.info — merge them into the setting response.
+   */
+  async _getMinerSettingMerged () {
+    const res = await this._framedRequest({ cmd: 'get.miner.setting' })
+    if (res?.code !== RESPONSE_CODES_V3.SUCCESS || typeof res.msg !== 'object') {
+      return res
+    }
+
+    try {
+      const di = await this._getDeviceInfoCached()
+      if (di?.code === RESPONSE_CODES_V3.SUCCESS && di.msg) {
+        const miner = di.msg.miner || {}
+        const system = di.msg.system || {}
+        const power = di.msg.power || {}
+        res.msg = {
+          ...res.msg,
+          'miner-working': miner.working,
+          'hash-percent': miner['hash-percent'],
+          'power-limit-set': miner['power-limit-set'],
+          'firmware-version': system.fwversion,
+          'liquid-temp': power['liquid-temperature']
+        }
+      }
+    } catch (e) {
+      this.debugError('get.device.info merge failed', e.message)
+    }
+
+    return res
   }
 
   async requestRead (command, params = {}) {
-    const cmd = {
-      cmd: command,
-      ...params
-    }
-    this.debugError(`Sending command ${JSON.stringify(cmd)}`)
+    this.debugError(`Sending command ${command} ${JSON.stringify(params)}`)
     try {
-      const res = await this._requestMiner(cmd)
+      let res
+      if (command === 'get.device.info' && params.param === undefined) {
+        res = await this._getDeviceInfoCached()
+      } else if (command === 'get.miner.setting') {
+        res = await this._getMinerSettingMerged()
+      } else {
+        const payload = { cmd: command }
+        if (params.param !== undefined) payload.param = params.param
+        res = await this._framedRequest(payload)
+      }
       this.debugError(`Received response ${JSON.stringify(res)}`)
       return res
     } catch (error) {
@@ -110,116 +245,26 @@ class WMApiV3 extends WMApiBase {
     }
   }
 
+  /**
+   * Native v3 writes are not wired up yet — write commands are routed
+   * through the v2-compat API (see miner.js init()).
+   */
   async requestWrite (command, params = {}, json = true) {
-    let retry = 0
-    let err = null
-
-    while (retry < 3) {
-      try {
-        if (this.salt === undefined) {
-          await this.refreshToken()
-        }
-
-        const ts = Math.floor(Date.now() / 1000)
-        const { token, key } = this._generateToken(command, ts)
-
-        const cmdObj = {
-          cmd: command,
-          ts,
-          token,
-          account: 'super',
-          ...params
-        }
-
-        const cmd = JSON.stringify(cmdObj)
-        this.debugError(`Sending command ${cmd}`)
-
-        const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
-        const encCmd = {
-          enc: 1,
-          data
-        }
-
-        const res = await this._requestMiner(encCmd, json)
-
-        // Cases when we only need to write to miner and there is no response, e.g: reboot
-        if (res.length === 0) {
-          return null
-        }
-        if (!res.enc) {
-          this.debugError(`Received response ${JSON.stringify(res)}`)
-          throw new Error(this._getAPICodeMsg(res))
-        }
-
-        const decrypted = CryptoJS.AES.decrypt(res.enc, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
-        const response = JSON.parse(hex2a(decrypted))
-
-        const responseCode = response.code !== undefined ? response.code : response.Code
-
-        if (responseCode === RESPONSE_CODES_V3.NO_PERMISSION) {
-          this.salt = undefined
-          retry++
-          continue
-        }
-        this.debugError(`Received response ${JSON.stringify(response)}`)
-        return response
-      } catch (e) {
-        err = e
-        this.salt = undefined
-        retry++
-      }
-    }
-
-    if (err) {
-      this.debugError('write_err', err)
-      throw err
-    }
-    return null
-  }
-
-  async _requestMiner (command, json = true) {
-    const response = await this.rpc.request(JSON.stringify(command))
-    return json ? JSON.parse(response) : response
-  }
-
-  _getAPICodeMsg (res) {
-    // Handle both V3 (code) and V2 (Code) format
-    const code = res?.code !== undefined ? res.code : res?.Code
-
-    // V3 response codes
-    const v3CodeMessages = {
-      0: 'OK',
-      [-1]: 'ERR_FAIL',
-      [-2]: 'ERR_INVALID_CMD',
-      [-4]: 'ERR_NO_PERMISSION'
-    }
-
-    // V2 response codes (for backward compatibility)
-    const v2CodeMessages = {
-      14: 'ERR_INVALID_CMD',
-      23: 'ERR_JSON_CMD',
-      45: 'ERR_PERMISSION_DENIED',
-      131: 'OK',
-      135: 'ERR_TOKEN_EXPIRED',
-      136: 'ERR_IP_LIMIT'
-    }
-
-    return v3CodeMessages[code] || v2CodeMessages[code] || `ERR_UNKNOWN_CODE_${code}`
+    throw new Error('ERR_V3_WRITE_NOT_IMPLEMENTED')
   }
 
   /**
    * Transform v2 underscore commands to v3 dot notation
-   * Also handles special case for summary/pools/edevs -> get.miner.status
    */
   transformCommand (command) {
     return COMMAND_MAP_V3[command] || command
   }
 
   /**
-   * Get the param value for get.miner.status commands
+   * Get the v3 `param` value for a read command (original v2 name)
    */
   getStatusParam (command) {
-    return V3_STATUS_PARAMS[command]
+    return V3_READ_PARAMS[command]
   }
 
   /**
@@ -228,49 +273,42 @@ class WMApiV3 extends WMApiBase {
    * V2: {STATUS, When, Code, Msg, Description}
    */
   parseResponse (response, originalCommand) {
-    // If response is already in V2 format, return as-is
-    if (response?.STATUS !== undefined || response?.Code !== undefined) {
+    // If response is already in V2 format (or null), return as-is
+    if (!response || response.code === undefined) {
       return response
     }
 
-    if (response?.code !== undefined) {
-      const msg = response.msg
-
-      const isMinerStatusCommand = ['summary', 'pools', 'edevs', 'devdetails'].includes(originalCommand)
-      const isMinerStatusResponse = response.desc === 'get.miner.status' ||
-        (isMinerStatusCommand && typeof msg === 'object')
-
-      if (isMinerStatusResponse && typeof msg === 'object') {
-        const converted = this._convertStatusResponse(msg, originalCommand)
-        return {
-          STATUS: response.code === RESPONSE_CODES_V3.SUCCESS ? 'S' : 'E',
-          When: response.when || Date.now(),
-          Code: this._convertV3CodeToV2(response.code),
-          Description: response.desc || '',
-          ...converted
-        }
-      }
-
-      if (originalCommand === 'status' && typeof msg === 'object') {
-        return {
-          STATUS: response.code === RESPONSE_CODES_V3.SUCCESS ? 'S' : 'E',
-          When: response.when || Date.now(),
-          Code: this._convertV3CodeToV2(response.code),
-          Msg: this._convertSettingFields(msg),
-          Description: response.desc || ''
-        }
-      }
-
-      return {
-        STATUS: response.code === RESPONSE_CODES_V3.SUCCESS ? 'S' : 'E',
-        When: response.when || Date.now(),
-        Code: this._convertV3CodeToV2(response.code),
-        Msg: msg,
-        Description: response.desc || ''
-      }
+    const base = {
+      STATUS: response.code === RESPONSE_CODES_V3.SUCCESS ? 'S' : 'E',
+      When: response.when || Math.floor(Date.now() / 1000),
+      Code: this._convertV3CodeToV2(response.code),
+      Description: response.desc || ''
     }
 
-    return response
+    const msg = response.msg
+    if (response.code !== RESPONSE_CODES_V3.SUCCESS || msg === undefined) {
+      return { ...base, Msg: msg }
+    }
+
+    switch (originalCommand) {
+      case 'summary':
+      case 'pools':
+      case 'edevs':
+      case 'devdetails':
+        return { ...base, ...this._convertStatusResponse(msg, originalCommand) }
+      case 'status':
+        return { ...base, Msg: this._convertSettingFields(msg) }
+      case 'get_version':
+        return { ...base, Msg: this._convertVersionFields(msg) }
+      case 'get_miner_info':
+        return { ...base, Msg: this._convertMinerInfoFields(msg) }
+      case 'get_error_code':
+        return { ...base, Msg: { error_code: msg['error-code'] || [] } }
+      case 'get_psu':
+        return { ...base, Msg: this._convertPsuFields(msg.power || msg) }
+      default:
+        return { ...base, Msg: msg }
+    }
   }
 
   /**
@@ -279,155 +317,203 @@ class WMApiV3 extends WMApiBase {
   _convertStatusResponse (msg, originalCommand) {
     const result = {}
 
-    // Convert summary if present
     if (msg.summary) {
       result.SUMMARY = [this._convertSummaryFields(msg.summary)]
-    } else if (originalCommand === 'summary' && msg.elapsed !== undefined) {
-      result.SUMMARY = [this._convertSummaryFields(msg)]
     }
 
-    // Convert pools if present
     if (msg.pools) {
       result.POOLS = msg.pools.map(p => this._convertPoolFields(p))
-    } else if (originalCommand === 'pools' && Array.isArray(msg)) {
-      result.POOLS = msg.map(p => this._convertPoolFields(p))
     }
 
-    // Convert edevs if present
     if (msg.edevs) {
-      result.DEVS = msg.edevs.map(d => this._convertEdevFields(d))
-    } else if (originalCommand === 'edevs' && Array.isArray(msg)) {
-      result.DEVS = msg.map(d => this._convertEdevFields(d))
+      const boardTemps = Array.isArray(msg.summary?.['board-temperature'])
+        ? msg.summary['board-temperature']
+        : []
+      result.DEVS = msg.edevs.map((d, i) => this._convertEdevFields(d, i, boardTemps))
     }
 
-    // Convert devdetails if present
-    if (msg.devdetails) {
-      result.DEVDETAILS = msg.devdetails.map(d => this._convertDevdetailFields(d))
-    } else if (originalCommand === 'devdetails' && Array.isArray(msg)) {
-      result.DEVDETAILS = msg.map(d => this._convertDevdetailFields(d))
+    // devdetails is deprecated and has no v3 equivalent
+    if (originalCommand === 'devdetails' && !result.DEVDETAILS) {
+      result.DEVDETAILS = []
     }
 
     return result
   }
 
   /**
-   * Convert V3 summary fields to V2 format
+   * Convert V3 summary fields to V2 format.
+   * V3 hash rates are in TH/s, V2 uses MH/s. Fields v3 does not expose
+   * (MHS 5s / MHS 5m / Target MHS / Accepted / Rejected) are intentionally
+   * left undefined — the caller applies explicit fallbacks.
    */
   _convertSummaryFields (summary) {
-    // V3 hash rates are in TH/s, V2 uses MH/s
-    const thsToMhs = (ths) => (ths || 0) * 1000000
+    const thsToMhs = (ths) => (parseFloat(ths) || 0) * 1000000
+    const boardTemp = summary['board-temperature']
 
     return {
-      Elapsed: summary.elapsed || 0,
-      Uptime: summary['bootup-time'] || 0,
+      Elapsed: summary.elapsed ?? 0,
+      Uptime: summary['bootup-time'] ?? 0,
       'MHS av': thsToMhs(summary['hash-average']),
-      'MHS 5s': thsToMhs(summary['hash-average']),
       'MHS 1m': thsToMhs(summary['hash-1min']),
-      'MHS 5m': thsToMhs(summary['hash-average']),
       'MHS 15m': thsToMhs(summary['hash-15min']),
       'HS RT': thsToMhs(summary['hash-realtime']),
-      freq_avg: summary['freq-avg'] || 0,
-      'Target Freq': summary['target-freq'] || 0,
-      'Factory GHS': (summary['factory-hash'] || 0) * 1000,
-      Power: summary['power-5min'] || summary['power-realtime'] || 0,
-      'Power Rate': summary['power-rate'] || 0,
-      'Env Temp': summary['environment-temperature'] || 0,
-      Temperature: Array.isArray(summary['board-temperature'])
-        ? summary['board-temperature'][0] || 0
-        : summary['board-temperature'] || 0,
-      'Chip Temp Min': summary['chip-temp-min'] || 0,
-      'Chip Temp Avg': summary['chip-temp-avg'] || 0,
-      'Chip Temp Max': summary['chip-temp-max'] || 0,
-      'Power Limit': summary['power-limit'] || 0,
-      'Upfreq Complete': summary['up-freq-finish'] || 0,
-      'Fan Speed In': summary['fan-speed-in'] || 0,
-      'Fan Speed Out': summary['fan-speed-out'] || 0
+      freq_avg: summary['freq-avg'] ?? 0,
+      'Target Freq': summary['target-freq'] ?? 0,
+      'Factory GHS': (parseFloat(summary['factory-hash']) || 0) * 1000,
+      Power: summary['power-5min'] ?? summary['power-realtime'] ?? 0,
+      'Power Rate': summary['power-rate'] ?? 0,
+      'Env Temp': summary['environment-temperature'] ?? 0,
+      Temperature: Array.isArray(boardTemp) ? (boardTemp[0] ?? 0) : (boardTemp ?? 0),
+      'Chip Temp Min': summary['chip-temp-min'] ?? 0,
+      'Chip Temp Avg': summary['chip-temp-avg'] ?? 0,
+      'Chip Temp Max': summary['chip-temp-max'] ?? 0,
+      'Power Limit': summary['power-limit'] ?? 0,
+      'Upfreq Complete': summary['up-freq-finish'] ?? 0,
+      'Fan Speed In': summary['fan-speed-in'] ?? 0,
+      'Fan Speed Out': summary['fan-speed-out'] ?? 0,
+      Debug: summary.Debug
     }
   }
 
   /**
-   * Convert V3 pool fields to V2 format
+   * Convert V3 pool fields to V2 format.
+   * V3 does not report share counts (Accepted/Rejected/Stale) — those are
+   * supplemented from the v2-compat API by the caller when available.
    */
   _convertPoolFields (pool) {
     return {
-      POOL: pool.id || 0,
+      POOL: pool.id ?? 0,
       URL: pool.url || '',
-      Status: pool.status ? pool.status.charAt(0).toUpperCase() + pool.status.slice(1) : 'Alive',
+      Status: pool.status ? pool.status.charAt(0).toUpperCase() + pool.status.slice(1) : '',
       User: pool.account || '',
       'Stratum Active': pool['stratum-active'] || false,
-      'Stratum Difficulty': pool['stratum-diff'] || 0,
-      Accepted: pool.accepted || 0,
-      Rejected: pool.rejected || 0,
-      Stale: pool.stale || 0,
-      'Pool Rejected%': pool['reject-rate'] || 0
+      'Stratum Difficulty': pool['stratum-diff'],
+      'Pool Rejected%': pool['reject-rate'] ?? 0,
+      'Last Share Time': pool['last-share-time']
     }
   }
 
   /**
-   * Convert V3 edev fields to V2 format
+   * Convert V3 edev fields to V2 format. PCB temperature comes from the
+   * summary board-temperature array (requested together via edevs+summary).
    */
-  _convertEdevFields (dev) {
-    const thsToMhs = (ths) => (ths || 0) * 1000000
+  _convertEdevFields (dev, index, boardTemps) {
+    const thsToMhs = (ths) => (parseFloat(ths) || 0) * 1000000
+    const slot = dev.slot ?? index
 
     return {
-      ASC: dev.id || 0,
-      ID: dev.id || 0,
-      Slot: dev.slot || 0,
+      ASC: dev.id ?? index,
+      ID: dev.id ?? index,
+      Slot: slot,
+      Temperature: boardTemps[slot] ?? boardTemps[index],
       'MHS av': thsToMhs(dev['hash-average']),
-      'Factory GHS': (dev['factory-hash'] || 0) * 1000,
-      'Chip Frequency': dev.freq || 0,
-      'Effective Chips': dev['effective-chips'] || 0,
-      'Chip Temp Min': dev['chip-temp-min'] || 0,
-      'Chip Temp Avg': dev['chip-temp-avg'] || 0,
-      'Chip Temp Max': dev['chip-temp-max'] || 0
+      'Factory GHS': (parseFloat(dev['factory-hash']) || 0) * 1000,
+      'Chip Frequency': dev.freq ?? 0,
+      'Effective Chips': dev['effective-chips'] ?? 0,
+      'Chip Temp Min': dev['chip-temp-min'] ?? 0,
+      'Chip Temp Avg': dev['chip-temp-avg'] ?? 0,
+      'Chip Temp Max': dev['chip-temp-max'] ?? 0
     }
   }
 
   /**
-   * Convert V3 devdetail fields to V2 format
+   * Convert merged get.miner.setting + get.device.info fields to the v2
+   * 'status' response shape.
    */
-  _convertDevdetailFields (detail) {
-    return {
-      DEVDETAILS: detail.slot || detail.id || 0,
-      ID: detail.id || 0,
-      Name: detail.name || 'SM',
-      Driver: detail.driver || '',
-      Model: detail.model || ''
-    }
-  }
-
   _convertSettingFields (msg) {
+    const toBoolString = (v) => {
+      if (v === true || v === 'true' || v === 'enable' || v === 1 || v === '1') return 'true'
+      return 'false'
+    }
+    const powerPct = parseFloat(msg['power-percent'])
+
     return {
-      mineroff: msg['miner-off'] || 'false',
-      mineroff_reason: msg['miner-off-reason'] || '',
-      mineroff_time: msg['miner-off-time'] || '',
+      // get.device.info miner.working: 'true' while btminer runs
+      mineroff: msg['miner-working'] !== undefined ? toBoolString(msg['miner-working'] !== 'true') : 'false',
+      mineroff_reason: '',
+      mineroff_time: '',
       FirmwareVersion: msg['firmware-version'] || '',
       power_mode: msg['power-mode'] || 'normal',
-      power_limit_set: msg['power-limit-set'] || '',
-      hash_percent: msg['hash-percent'] || '0',
-      fast_mining: msg['fast-mining'] || 'false',
-      fast_hash: msg['fast-hash'] || 'false',
-      liquid_temp: msg['liquid-temp'] || 0,
-      power_pct: msg['power-pct'] !== undefined ? msg['power-pct'].toString() : '100'
+      power_limit_set: (msg['power-limit-set'] ?? msg['power-limit'] ?? '').toString(),
+      hash_percent: (msg['hash-percent'] ?? '0').toString(),
+      fast_mining: toBoolString(msg['fast-mining']),
+      fast_hash: toBoolString(msg['fast-hash']),
+      liquid_temp: msg['liquid-temp'] ?? 0,
+      // power-percent is 0 when no percent override is active
+      power_pct: (powerPct > 0 ? powerPct : 100).toString(),
+      upfreq_speed: msg['upfreq-speed']
     }
   }
 
   /**
-   * Convert V3 response code to V2 format
+   * Build the v2 get_version Msg from the get.device.info response
+   */
+  _convertVersionFields (msg) {
+    const system = msg.system || {}
+    const miner = msg.miner || {}
+    return {
+      api_ver: system.api || '',
+      fw_ver: system.fwversion || '',
+      platform: system.platform || '',
+      chip: miner.chipdata0 || ''
+    }
+  }
+
+  /**
+   * Build the v2 get_miner_info Msg from the get.device.info response
+   */
+  _convertMinerInfoFields (msg) {
+    const network = msg.network || {}
+    const system = msg.system || {}
+    const miner = msg.miner || {}
+    return {
+      ip: network.ip || '',
+      proto: network.proto || '',
+      netmask: network.netmask || '',
+      gateway: network.gateway || '',
+      dns: network.dns || '',
+      hostname: network.hostname || '',
+      mac: network.mac || '',
+      ledstat: system.ledstatus || 'auto',
+      minersn: miner['miner-sn'] || ''
+    }
+  }
+
+  /**
+   * Build the v2 get_psu Msg from the get.device.info power section
+   */
+  _convertPsuFields (power = {}) {
+    return {
+      name: power.type || power.model || '',
+      hw_version: power.hwversion || '',
+      sw_version: power.swversion || '',
+      model: power.model || '',
+      fan_speed: power.fanspeed,
+      iin: power.iin,
+      vin: power.vin,
+      serial_no: power.sn || '',
+      // v2 uses the 'vender' typo; provide both spellings
+      vender: power.vendor || '',
+      vendor: power.vendor || ''
+    }
+  }
+
+  /**
+   * Convert V3 response code to the closest V2 code
    */
   _convertV3CodeToV2 (v3Code) {
     const codeMap = {
-      [RESPONSE_CODES_V3.SUCCESS]: 131,
-      [RESPONSE_CODES_V3.FAIL]: 14,
-      [RESPONSE_CODES_V3.INVALID_COMMAND]: 14,
-      [RESPONSE_CODES_V3.NO_PERMISSION]: 135
+      [RESPONSE_CODES_V3.SUCCESS]: 131, // Command OK
+      [RESPONSE_CODES_V3.FAIL]: 132, // Command error
+      [RESPONSE_CODES_V3.INVALID_COMMAND]: 14, // Invalid API command or data
+      [RESPONSE_CODES_V3.PARAM_NULL]: 23, // Invalid JSON message
+      [RESPONSE_CODES_V3.NO_PERMISSION]: 45 // Permission denied
     }
-    return codeMap[v3Code] || v3Code
+    return codeMap[v3Code] ?? v3Code
   }
 
   /**
-   * Get salt info (for external use like firmware updates)
-   * For V3, tokens are generated per-command, so we return salt
+   * Get salt info (v3 tokens are generated per-command from the salt)
    * @returns {{salt: string}|undefined}
    */
   getTokenInfo () {
@@ -437,8 +523,8 @@ class WMApiV3 extends WMApiBase {
 
   /**
    * Generate token info for a specific command (for external use)
-   * @param {string} command - The command name
-   * @returns {{token: string, key: string, salt: string, ts: number}|undefined}
+   * @param {string} command
+   * @returns {{token: string, key: Object, salt: string, ts: number}|undefined}
    */
   generateTokenInfo (command) {
     if (!this.salt) return undefined

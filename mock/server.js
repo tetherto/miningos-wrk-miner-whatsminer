@@ -6,7 +6,6 @@ const path = require('path')
 const yargs = require('yargs/yargs')
 const { hideBin } = require('yargs/helpers')
 const debug = require('debug')('mock')
-const CryptoJS = require('crypto-js')
 const { decryptCommand, encryptResponse } = require('./utils')
 const MockControlAgent = require('./mock-control-agent')
 const { promiseSleep } = require('@bitfinex/lib-js-util-promise')
@@ -16,30 +15,14 @@ const MINER_TYPES = ['m63', 'm56s', 'm53s', 'm30sp', 'm30spp', 'm63spp']
 const SALT = '5QAHiKMb'
 
 /**
- * Generates encryption key from password (V2 - MD5 based)
+ * Generates encryption key from password (V2 - MD5 based).
+ * The main port always speaks the v2 protocol (v3 firmware serves a
+ * v2-compat API there); the v3 framed listener does not use this key.
  */
-const generateEncryptionKeyV2 = (password) => {
+const generateEncryptionKey = (password) => {
   const key = md5.crypt(password, SALT)
   const arr = key.split('$')
   return arr[arr.length - 1]
-}
-
-/**
- * Generates encryption key from password (V3 - SHA256 based)
- */
-const generateEncryptionKeyV3 = (password) => {
-  // V3 uses SHA256(password + salt)
-  return CryptoJS.SHA256(password + SALT).toString()
-}
-
-/**
- * Generates encryption key based on API version
- */
-const generateEncryptionKey = (password, apiVersion) => {
-  if (apiVersion === 'v3') {
-    return generateEncryptionKeyV3(password)
-  }
-  return generateEncryptionKeyV2(password)
 }
 
 /**
@@ -195,6 +178,7 @@ if (require.main === module) {
     .option('minerpoolMockPort', { type: 'number', description: 'minerpool mock port', default: 8000 })
     .option('minerpoolMockHost', { type: 'string', description: 'minerpool mock host', default: '127.0.0.1' })
     .option('apiVersion', { description: 'API version (v2 or v3)', type: 'string', default: 'v2' })
+    .option('v3Port', { description: 'port for the v3 API (length-prefixed framing); mirrors v3 firmware serving v2-compat on `port` and the v3 API here', type: 'number' })
     .parse()
 
   const things = argv.bulk ? JSON.parse(fs.readFileSync(argv.bulk)) : [argv]
@@ -202,8 +186,8 @@ if (require.main === module) {
   agent.init(runServer)
 } else {
   module.exports = {
-    createServer ({ port, host, type, serial, password, apiVersion, dlFault, dlLogSizeBytes }) {
-      return runServer({ port, host, type, serial, password, apiVersion, dlFault, dlLogSizeBytes })
+    createServer ({ port, host, type, serial, password, apiVersion, v3Port, dlFault, dlLogSizeBytes }) {
+      return runServer({ port, host, type, serial, password, apiVersion, v3Port, dlFault, dlLogSizeBytes })
     }
   }
 }
@@ -223,13 +207,14 @@ function runServer (argv, ops = {}) {
     minerpoolMockHost: argv.minerpoolMockHost,
     password: argv.password || defaultPassword,
     apiVersion,
+    v3Port: argv.v3Port || null,
     dlFault: argv.dlFault || null,
     dlLogSizeBytes: argv.dlLogSizeBytes || null
   }
 
   const STATE = {}
   const validTokens = new Set()
-  const encryptionKey = generateEncryptionKey(CTX.password, CTX.apiVersion)
+  const encryptionKey = generateEncryptionKey(CTX.password)
 
   // Add validTokens to CTX so commands can add tokens
   CTX.validTokens = validTokens
@@ -285,24 +270,11 @@ function runServer (argv, ops = {}) {
       cmd = req
     }
 
-    // Find and execute command
+    // Find and execute command. The main port always speaks the v2 protocol —
+    // real v3 firmware serves a v2-compat API here while the v3 API (framed)
+    // lives on v3Port.
     const command = cmd.cmd || cmd.command || null
-
-    // Build command paths based on API version
-    // For V3, first try cmds-v3/, then fall back to cmds/ (with underscore conversion)
-    let cmdPaths
-    if (CTX.apiVersion === 'v3') {
-      // Try V3 specific commands first, then fall back to V2 commands
-      const v2Command = command.replace(/\./g, '_') // Convert dot notation to underscore for fallback
-      cmdPaths = [
-        `./cmds-v3/${command}`,
-        `./cmds-v3/${CTX.type}/${command}`,
-        `./cmds/${v2Command}`,
-        `./cmds/${CTX.type}/${v2Command}`
-      ]
-    } else {
-      cmdPaths = [`./cmds/${command}`, `./cmds/${CTX.type}/${command}`]
-    }
+    const cmdPaths = [`./cmds/${command}`, `./cmds/${CTX.type}/${command}`]
     const cmdPath = findExistingPath(cmdPaths)
 
     if (!cmdPath) {
@@ -345,6 +317,77 @@ function runServer (argv, ops = {}) {
     }
   }
 
+  // --- V3 API server (length-prefixed JSON framing, official v3 protocol) ---
+
+  const writeFramed = (socket, obj) => {
+    const body = Buffer.from(JSON.stringify(obj), 'utf8')
+    const len = Buffer.alloc(4)
+    len.writeUInt32LE(body.length, 0)
+    socket.write(Buffer.concat([len, body]))
+  }
+
+  const v3Error = (code, msg, desc) => ({ code, when: Math.floor(Date.now() / 1000), msg, desc })
+
+  const processV3Cmd = async (socket, req) => {
+    const command = req.cmd || null
+    const cmdPath = command && findExistingPath([`./cmds-v3/${command}`, `./cmds-v3/${CTX.type}/${command}`])
+
+    if (!cmdPath) {
+      return writeFramed(socket, v3Error(-2, 'invalid command', command || ''))
+    }
+
+    try {
+      const res = require(cmdPath)(CTX, STATE.state, req)
+
+      if (res === null) return // e.g. reboot: no response
+
+      if (CTX.delay) await promiseSleep(CTX.delay)
+
+      // Two-phase response (get.log.download): framed JSON header then raw bytes
+      if (res._binaryPayload) {
+        const binaryData = res._binaryPayload
+        delete res._binaryPayload
+        writeFramed(socket, res)
+        await promiseSleep(10)
+        socket.end(binaryData)
+        return
+      }
+
+      writeFramed(socket, res)
+    } catch (e) {
+      debug(new Date(), req, e)
+      writeFramed(socket, v3Error(-1, 'command failed', command || ''))
+    }
+  }
+
+  let v3Server = null
+  if (CTX.v3Port) {
+    v3Server = new net.Server()
+    v3Server.listen(CTX.v3Port, argv.host, function () {
+      debug(new Date(), `V3 server listening on ${argv.host}:${CTX.v3Port}`)
+    })
+    v3Server.on('connection', (socket) => {
+      let buf = Buffer.alloc(0)
+      socket.on('error', () => {})
+      socket.on('data', async (chunk) => {
+        buf = Buffer.concat([buf, chunk])
+        while (buf.length >= 4) {
+          const len = buf.readUInt32LE(0)
+          if (buf.length < 4 + len) return
+          const body = buf.subarray(4, 4 + len)
+          buf = buf.subarray(4 + len)
+          let req
+          try {
+            req = JSON.parse(body.toString('utf8'))
+          } catch (e) {
+            return writeFramed(socket, v3Error(-2, 'invalid json', ''))
+          }
+          await processV3Cmd(socket, req)
+        }
+      })
+    })
+  }
+
   const server = new net.Server()
 
   server.listen(argv.port, argv.host, function () {
@@ -382,6 +425,7 @@ function runServer (argv, ops = {}) {
     state: STATE.state,
     exit: () => {
       server.close()
+      if (v3Server) v3Server.close()
     },
     start: () => {
       // if server isn't started
@@ -390,11 +434,17 @@ function runServer (argv, ops = {}) {
           debug(`Server listening on socket ${argv.host}:${argv.port}`)
         })
       }
+      if (v3Server && !v3Server.listening) {
+        v3Server.listen(CTX.v3Port, argv.host)
+      }
     },
     stop: () => {
       // if server is started
       if (server.listening) {
         server.close()
+      }
+      if (v3Server && v3Server.listening) {
+        v3Server.close()
       }
     },
     reset: () => {

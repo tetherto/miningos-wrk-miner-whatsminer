@@ -20,8 +20,9 @@ module.exports = function (ctx, state) {
     '--- End of Log ---\n'
   )
 
+  // Official v3 field name is `logsize` (v2 uses logfilelen)
   const response = createV3SuccessResponse({
-    logfilelen: mockLogContent.length.toString()
+    logsize: mockLogContent.length.toString()
   }, 'get.log.download')
 
   response._binaryPayload = mockLogContent

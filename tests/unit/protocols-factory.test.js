@@ -150,7 +150,7 @@ test('protocols/factory - created handlers have correct properties', (t) => {
 
   // V3 handler
   t.is(v3Handler.getAuthCommand(), 'get.device.info', 'V3 auth command should be get.device.info')
-  t.is(v3Handler.transformCommand('get_version'), 'get.version', 'V3 should transform commands')
+  t.is(v3Handler.transformCommand('get_version'), 'get.device.info', 'V3 should transform commands')
 })
 
 test('protocols/factory - API_VERSIONS matches handler static properties', (t) => {

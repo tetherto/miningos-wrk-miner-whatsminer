@@ -50,10 +50,12 @@ test('protocols/constants - COMMAND_MAP_V3 auth commands', (t) => {
 })
 
 test('protocols/constants - COMMAND_MAP_V3 read commands', (t) => {
-  t.is(COMMAND_MAP_V3.get_version, 'get.version', 'get_version should map correctly')
-  t.is(COMMAND_MAP_V3.get_miner_info, 'get.miner.info', 'get_miner_info should map correctly')
-  t.is(COMMAND_MAP_V3.get_error_code, 'get.error.code', 'get_error_code should map correctly')
-  t.is(COMMAND_MAP_V3.get_psu, 'get.psu', 'get_psu should map correctly')
+  // There is no get.version/get.miner.info/get.error.code/get.psu in v3 —
+  // all device data comes from get.device.info (param-filtered sections)
+  t.is(COMMAND_MAP_V3.get_version, 'get.device.info', 'get_version should map correctly')
+  t.is(COMMAND_MAP_V3.get_miner_info, 'get.device.info', 'get_miner_info should map correctly')
+  t.is(COMMAND_MAP_V3.get_error_code, 'get.device.info', 'get_error_code should map correctly')
+  t.is(COMMAND_MAP_V3.get_psu, 'get.device.info', 'get_psu should map correctly')
   // V3 uses get.miner.status with param for summary/pools/edevs/devdetails
   t.is(COMMAND_MAP_V3.summary, 'get.miner.status', 'summary should map to get.miner.status')
   t.is(COMMAND_MAP_V3.pools, 'get.miner.status', 'pools should map to get.miner.status')
@@ -64,7 +66,7 @@ test('protocols/constants - COMMAND_MAP_V3 read commands', (t) => {
 test('protocols/constants - COMMAND_MAP_V3 write commands', (t) => {
   // V3 API uses set.* commands per documentation
   t.is(COMMAND_MAP_V3.update_pools, 'set.miner.pools', 'update_pools should map correctly')
-  t.is(COMMAND_MAP_V3.update_pwd, 'set.miner.passwd', 'update_pwd should map correctly')
+  t.is(COMMAND_MAP_V3.update_pwd, 'set.user.change_passwd', 'update_pwd should map correctly')
   t.is(COMMAND_MAP_V3.reboot, 'set.system.reboot', 'reboot should map correctly')
   // V3 uses set.miner.service for power control (param: start/stop)
   t.is(COMMAND_MAP_V3.power_on, 'set.miner.service', 'power_on should map correctly')
@@ -86,31 +88,34 @@ test('protocols/constants - COMMAND_MAP_V3 config commands', (t) => {
   t.is(COMMAND_MAP_V3.set_led, 'set.system.led', 'set_led should map correctly')
   t.is(COMMAND_MAP_V3.set_hostname, 'set.system.hostname', 'set_hostname should map correctly')
   t.is(COMMAND_MAP_V3.set_zone, 'set.system.timezone', 'set_zone should map correctly')
-  t.is(COMMAND_MAP_V3.net_config, 'set.network.config', 'net_config should map correctly')
+  t.is(COMMAND_MAP_V3.net_config, 'set.system.net_config', 'net_config should map correctly')
 })
 
 test('protocols/constants - COMMAND_MAP_V2 reverse mapping', (t) => {
   t.ok(COMMAND_MAP_V2, 'should export COMMAND_MAP_V2')
-  t.is(COMMAND_MAP_V2['get.device.info'], 'get_token', 'get.device.info should reverse map to get_token')
-  t.is(COMMAND_MAP_V2['get.version'], 'get_version', 'get.version should reverse map correctly')
+  t.ok(COMMAND_MAP_V2['get.device.info'], 'get.device.info should have a reverse mapping')
   t.is(COMMAND_MAP_V2['set.miner.pools'], 'update_pools', 'set.miner.pools should reverse map correctly')
 })
 
 test('protocols/constants - COMMAND_MAP_V2 bidirectional consistency', (t) => {
   // Note: Multiple V2 commands can map to the same V3 command (many-to-one mapping):
+  // - get_token/get_version/get_miner_info/get_error_code/get_psu -> get.device.info
   // - summary, pools, edevs, devdetails -> get.miner.status
   // - power_on, power_off, pre_power_on, restart_btminer -> set.miner.service
   // - set_low_power, set_normal_power, set_high_power -> set.miner.power_mode
+  // - set_power_pct, set_power_pct_v2 -> set.miner.power_percent
   // - enable_btminer_fast_boot, disable_btminer_fast_boot -> set.miner.fastboot
-  // - enable_web_pools, disable_web_pools -> set.miner.web_pools
+  // - enable_web_pools, disable_web_pools -> set.system.webpools
   // The reverse mapping only keeps one (the last one processed), which is expected
 
   const multiMappedV3Commands = [
+    'get.device.info',
     'get.miner.status',
     'set.miner.service',
     'set.miner.power_mode',
+    'set.miner.power_percent',
     'set.miner.fastboot',
-    'set.miner.web_pools'
+    'set.system.webpools'
   ]
 
   for (const [v2Cmd, v3Cmd] of Object.entries(COMMAND_MAP_V3)) {

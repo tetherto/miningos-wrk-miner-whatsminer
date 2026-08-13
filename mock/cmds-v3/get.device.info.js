@@ -1,45 +1,88 @@
 'use strict'
 
-const CryptoJS = require('crypto-js')
-const { createSuccessResponse } = require('../utils')
+const { createV3SuccessResponse, createV3ErrorResponse } = require('../utils')
+
+const SALT = '5QAHiKMb'
 
 /**
  * V3 API get.device.info command handler
- * This is the authentication command for API v3.0.3
  *
- * V3 uses SHA256-based token (first 8 chars of base64):
- * token = SHA256(password + salt).substring(0, 8)
+ * Per the official API v3 documentation this single command exposes all
+ * device data. `param` optionally filters to one section:
+ *   miner | system | power | network | salt | error-code
+ * With no param all sections (plus salt and error-code) are returned.
  *
- * Returns V2-compatible response format for simplicity
+ * Response format (V3): {code, when, msg, desc}
  */
-module.exports = function (ctx, state) {
-  // max active tokens reached
-  if (state.activeTokens >= 16) {
-    state.activeTokens = 0
-    return { STATUS: 'E', When: +new Date(), Code: 136, Msg: 'Too many connections', Description: '' }
+module.exports = function (ctx, state, req) {
+  const minerInfo = state.miner_info || {}
+  const version = state.version || {}
+  const summary = state.summary || {}
+
+  const sections = {
+    network: {
+      ip: minerInfo.ip || ctx.host,
+      proto: minerInfo.proto || 'dhcp',
+      netmask: minerInfo.netmask || '255.255.255.0',
+      dns: minerInfo.dns || '192.168.0.1',
+      mac: minerInfo.mac || 'CA:7A:0A:00:02:23',
+      gateway: minerInfo.gateway || '192.168.0.1',
+      hostname: minerInfo.hostname || 'WhatsMiner'
+    },
+    miner: {
+      working: state.suspended ? 'false' : 'true',
+      type: version.miner_type || 'M7BS_VM30',
+      'hash-board': 'M30',
+      cointype: 'BTC',
+      'pool-strategy': 'FAILOVER',
+      heatmode: '',
+      'hash-percent': state.hash_percent || '0',
+      chipdata0: version.chip || 'KAAP315-2601 BINVLC-199004E',
+      'fast-boot': summary['Btminer Fast Boot'] === 'enable' ? 'enable' : 'disable',
+      'board-num': '4',
+      'miner-sn': ctx.serial,
+      'power-limit-set': summary['Power Limit'] ? summary['Power Limit'].toString() : '',
+      UpfreqSpeed: '',
+      'web-pool': 1,
+      permission: 'super=255 user1=0 user2=0 user3=0'
+    },
+    system: {
+      api: version.api_ver || '3.0.3',
+      platform: version.platform || 'H616',
+      fwversion: version.fw_ver || '20260312.16.REL3',
+      'control-board-version': 'CB6V5',
+      apiswitch: '1',
+      ledstatus: state.led_mode === 'manual' ? 'manual' : (minerInfo.ledstat || 'auto')
+    },
+    power: {
+      type: 'P566Z',
+      mode: '1',
+      hwversion: 'HA3000000',
+      swversion: '1653.1411',
+      model: 'P566Z',
+      iin: 10.52,
+      vin: 409,
+      vout: 4084,
+      pin: summary.Power || 7477,
+      'liquid-temperature': state.liquid_temp !== undefined ? state.liquid_temp : 44.1,
+      fanspeed: 6000,
+      temp0: 55.0,
+      sn: '2F260200665',
+      vendor: '6'
+    },
+    salt: SALT,
+    'error-code': (state.error_code || []).map((item) => {
+      if (typeof item === 'object') return item
+      return { [item]: new Date().toISOString(), reason: `Error ${item}` }
+    })
   }
 
-  state.activeTokens++
-
-  const salt = '5QAHiKMb'
-  const time = Math.floor(Date.now() / 1000).toString()
-
-  // V3: Generate SHA256-based token that miner will generate
-  // token = first 8 chars of base64(SHA256(password + salt))
-  if (ctx.password && ctx.validTokens) {
-    const tokenHash = CryptoJS.SHA256(ctx.password + salt)
-    const tokenBase64 = tokenHash.toString(CryptoJS.enc.Base64)
-    const tokenSign = tokenBase64.substring(0, 8)
-    ctx.validTokens.add(tokenSign)
+  if (req.param !== undefined) {
+    if (!(req.param in sections)) {
+      return createV3ErrorResponse(-2, `invalid param: ${req.param}`, 'get.device.info')
+    }
+    return createV3SuccessResponse({ [req.param]: sections[req.param] }, 'get.device.info')
   }
 
-  // Return V2-compatible response with auth data
-  return createSuccessResponse({
-    salt,
-    time,
-    // Device info
-    model: state.version?.chip || 'WM30SP',
-    serial: ctx.serial,
-    mac: 'CA:7A:0A:00:02:23'
-  })
+  return createV3SuccessResponse(sections, 'get.device.info')
 }

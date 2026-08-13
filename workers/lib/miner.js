@@ -15,12 +15,20 @@ const {
   MINER_COOLING_TYPE_MAP,
   DOWNLOAD_LOGS
 } = require('./constants')
-const { RESPONSE_CODES_V2 } = require('./protocols/constants')
+const { RESPONSE_CODES_V2, API_DEFAULTS } = require('./protocols/constants')
 const { STATUS, POWER_MODE } = require('@tetherto/miningos-tpl-wrk-miner/workers/lib/constants')
-const { ApiHandlerFactory, API_VERSIONS } = require('./protocols')
+const { ApiHandlerFactory, API_VERSIONS, WMApiV2, WMApiV3 } = require('./protocols')
+
+const V3_DEFAULT_PORT = API_DEFAULTS[API_VERSIONS.V3].port
 
 function isResOK (res) {
   return res?.Code === 131
+}
+
+// Rounds to 2 decimals; returns null (JSON-safe) for missing/non-numeric input
+function round2 (value) {
+  const num = parseFloat(value)
+  return Number.isFinite(num) ? Math.floor(num * 100) / 100 : null
 }
 
 /**
@@ -73,45 +81,99 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   /**
-   * Initializes the miner with API version detection if not provided
+   * Initializes the miner with API version detection if not provided.
+   *
+   * On v3 firmware (fw_ver *.RELx with api >= 3) the miner serves the full
+   * API on port 4433 (length-prefixed framing) and a DEGRADED v2-compat API
+   * on port 4028 (missing per-board chip temperatures, share-rate windows,
+   * etc.). Reads therefore go through the v3 handler when detected, while
+   * writes keep using the documented v2-compat API on the registered port
+   * until native v3 writes are implemented.
    */
   async init () {
     if (!this.apiVersion) {
       this.apiVersion = await this._detectApiVersion()
     }
 
-    this.protocolHandler = ApiHandlerFactory.create(this.apiVersion, {
+    const handlerOpts = {
       rpc: this.rpc,
       password: this.opts.password,
       debugError: this.debugError.bind(this)
-    })
+    }
+
+    if (ApiHandlerFactory.getMajorVersion(this.apiVersion) === 3) {
+      this.v3Port = this._getV3Port()
+      this.protocolHandler = new WMApiV3({
+        ...handlerOpts,
+        address: this.opts.address,
+        port: this.v3Port,
+        timeout: this.opts.timeout,
+        deviceInfoSeed: this._v3DeviceInfoSeed
+      })
+      // Writes (and pool share-count supplement) still use the v2-compat API
+      // on the registered port; unavailable when the thing was registered
+      // directly on the v3 port.
+      this.writeHandler = this.opts.port && this.opts.port !== this.v3Port
+        ? new WMApiV2(handlerOpts)
+        : null
+    } else {
+      this.protocolHandler = ApiHandlerFactory.create(this.apiVersion, handlerOpts)
+      this.writeHandler = this.protocolHandler
+    }
+
+    this._v3DeviceInfoSeed = undefined
+  }
+
+  _getV3Port () {
+    return this.conf.v3ApiPort || V3_DEFAULT_PORT
+  }
+
+  _isV3 () {
+    return ApiHandlerFactory.getMajorVersion(this.apiVersion) === 3
   }
 
   /**
-   * Detects the API version by attempting to connect on known ports/commands
+   * Detects the API version. The v3 port is probed first because v3 firmware
+   * also answers v2 commands on port 4028 (with a reduced field set), so a
+   * v2-first probe or a port-based shortcut would misclassify v3 miners.
+   * Returns the actual version reported by the device (e.g. '3.0.5', '2.2.2')
+   * so it can be persisted; the handler is selected by major version.
    * @returns {Promise<string>}
    */
   async _detectApiVersion () {
-    if (this.opts.port === 4433) {
-      return API_VERSIONS.V3
-    }
-    if (this.opts.port === 4028) {
-      return API_VERSIONS.V2
+    try {
+      const res = await WMApiV3.probeDeviceInfo({
+        address: this.opts.address,
+        port: this._getV3Port(),
+        timeout: Math.min(this.opts.timeout || 5000, 5000)
+      })
+      if (res?.code === 0 && res.msg) {
+        this._v3DeviceInfoSeed = res
+        return res.msg.system?.api || API_VERSIONS.V3
+      }
+    } catch (e) {
+      this.debugError('V3 API probe failed:', e.message)
     }
 
-    const detectors = [
-      { version: API_VERSIONS.V2, cmd: 'get_token' },
-      { version: API_VERSIONS.V3, cmd: 'get.device.info' }
-    ]
-
-    for (const { version, cmd } of detectors) {
+    // No v3 API — confirm v2 and pick up the reported version
+    if (this.opts.port !== this._getV3Port()) {
       try {
-        const res = await this._execCommand(cmd)
-        if (res && !res.error && res.Msg) {
-          return version
+        const res = await this._execCommand('get_version')
+        const apiVer = res?.Msg?.api_ver
+        if (apiVer && ApiHandlerFactory.getMajorVersion(apiVer)) {
+          return apiVer
         }
       } catch (e) {
-        this.debugError(`Version detection failed for ${version}:`, e.message)
+        this.debugError('V2 get_version probe failed:', e.message)
+      }
+
+      try {
+        const res = await this._execCommand('get_token')
+        if (res && !res.error && res.Msg) {
+          return API_VERSIONS.V2
+        }
+      } catch (e) {
+        this.debugError('V2 get_token probe failed:', e.message)
       }
     }
 
@@ -132,16 +194,27 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   async close () {
-    await this.rpc.stop()
+    try {
+      await this.rpc.stop()
+    } catch (e) {
+      this.debugError('rpc close error', e.message)
+    }
+  }
+
+  _getWriteHandler () {
+    if (!this.writeHandler) {
+      throw new Error('ERR_WRITE_API_UNAVAILABLE')
+    }
+    return this.writeHandler
   }
 
   async _getToken () {
-    return this.protocolHandler.authenticate()
+    return this._getWriteHandler().authenticate()
   }
 
   async _refreshToken () {
     try {
-      await this.protocolHandler.refreshToken()
+      await this._getWriteHandler().refreshToken()
     } catch (e) {
       this.debugError('_refreshToken error', e)
       throw e
@@ -149,19 +222,19 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   /**
-   * Gets the current token info from the protocol handler
+   * Gets the current token info from the write handler
    * @returns {{token: string, sign: string, key: string}|undefined}
    */
   get token () {
-    return this.protocolHandler?.getTokenInfo()
+    return this.writeHandler?.getTokenInfo()
   }
 
   /**
    * Sets/clears the token (for backwards compatibility)
    */
   set token (value) {
-    if (value === undefined && this.protocolHandler) {
-      this.protocolHandler.clearToken()
+    if (value === undefined && this.writeHandler) {
+      this.writeHandler.clearToken()
     }
   }
 
@@ -235,20 +308,22 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   async _requestWriteEndpoint (command, additionalParams = {}, json = true) {
-    const cmd = this.protocolHandler.transformCommand(command)
-    const res = await this.protocolHandler.requestWrite(cmd, additionalParams, json)
+    const handler = this._getWriteHandler()
+    const cmd = handler.transformCommand(command)
+    const res = await handler.requestWrite(cmd, additionalParams, json)
     this.updateLastSeen()
-    return res ? this.protocolHandler.parseResponse(res, command) : null
+    return res ? handler.parseResponse(res, command) : null
   }
 
   async _requestWriteFirmwareEndpoint (filename) {
+    const handler = this._getWriteHandler()
     // Ensure we have a valid token
     if (!this.token) {
       await this._refreshToken()
     }
-    const tokenInfo = this.protocolHandler.getTokenInfo()
+    const tokenInfo = handler.getTokenInfo()
     const { sign, key } = tokenInfo
-    const firmwareCmd = this.protocolHandler.transformCommand('update_firmware')
+    const firmwareCmd = handler.transformCommand('update_firmware')
     const cmd = JSON.stringify({
       token: sign,
       cmd: firmwareCmd
@@ -280,8 +355,7 @@ class WhatsminerMiner extends BaseMiner {
         return await this._socketDownloadLogs(encCmd, decryptionKey)
       } catch (err) {
         // V2 tokens expire mid-session; clear and retry once with a fresh token.
-        // V3 generates per-command tokens so expiry cannot occur there.
-        if (err.responseCode === RESPONSE_CODES_V2.TOKEN_EXPIRED && !tokenRefreshed && this.apiVersion !== API_VERSIONS.V3) {
+        if (err.responseCode === RESPONSE_CODES_V2.TOKEN_EXPIRED && !tokenRefreshed) {
           tokenRefreshed = true
           this.token = undefined
           attempt-- // token refresh does not consume a transfer attempt
@@ -300,19 +374,11 @@ class WhatsminerMiner extends BaseMiner {
     throw lastErr
   }
 
+  // Download logs go through the v2(-compat) API on the registered port
   _buildDownloadLogsCmd () {
-    const downloadCmd = this.protocolHandler.transformCommand('download_logs')
-
-    if (this.apiVersion === API_VERSIONS.V3) {
-      const { token, key } = this.protocolHandler.generateTokenInfo(downloadCmd)
-      const ts = Math.floor(Date.now() / 1000)
-      const cmd = JSON.stringify({ cmd: downloadCmd, ts, token, account: 'super' })
-      const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
-      return { encCmd: JSON.stringify({ enc: 1, data }), decryptionKey: key }
-    }
-
-    const { sign, key } = this.protocolHandler.getTokenInfo()
-    const cmd = JSON.stringify({ token: sign, cmd: downloadCmd })
+    const handler = this._getWriteHandler()
+    const { sign, key } = handler.getTokenInfo()
+    const cmd = JSON.stringify({ token: sign, cmd: 'download_logs' })
     const data = CryptoJS.AES.encrypt(cmd, CryptoJS.SHA256(key), { mode: CryptoJS.mode.ECB }).toString()
     return { encCmd: JSON.stringify({ enc: 1, data }), decryptionKey: key }
   }
@@ -392,7 +458,7 @@ class WhatsminerMiner extends BaseMiner {
           return settle(new Error('ERR_DOWNLOAD_LOGS_PARSE_FAILED'))
         }
 
-        if (!this.protocolHandler.isResponseOK(resp)) {
+        if (!this._getWriteHandler().isResponseOK(resp)) {
           const code = resp.Code ?? resp.code
           const err = new Error(`ERR_DOWNLOAD_LOGS_FAILED: Code ${code}`)
           err.responseCode = code
@@ -554,12 +620,17 @@ class WhatsminerMiner extends BaseMiner {
     }
 
     const summary = res.SUMMARY[0]
+    // Newer firmware (v3 and its v2-compat layer) drops the 5s/5m windows and
+    // Target MHS — fall back to the closest available metric (5s -> realtime,
+    // 5m -> 1m window, target -> factory hash).
+    const targetMhs = summary['Target MHS'] ??
+      (parseFloat(summary['Factory GHS']) ? parseFloat(summary['Factory GHS']) * 1000 : undefined)
     const processedStats = {
       elapsed: summary.Elapsed,
       mhs_av: summary['MHS av'],
-      mhs_5s: summary['MHS 5s'],
+      mhs_5s: summary['MHS 5s'] ?? summary['HS RT'],
       mhs_1m: summary['MHS 1m'],
-      mhs_5m: summary['MHS 5m'],
+      mhs_5m: summary['MHS 5m'] ?? summary['MHS 1m'],
       mhs_15m: summary['MHS 15m'],
       prev_mhs: this._cachedPrevHashrate,
       hs_rt: summary['HS RT'],
@@ -579,7 +650,7 @@ class WhatsminerMiner extends BaseMiner {
       hash_stable_cost_seconds: summary['Hash Stable Cost Seconds'],
       hash_deviation: summary['Hash Deviation%'],
       target_freq: summary['Target Freq'],
-      target_mhs: summary['Target MHS'],
+      target_mhs: targetMhs,
       env_temp: summary['Env Temp'],
       power_mode: summary['Power Mode'],
       factory_ghs: summary['Factory GHS'],
@@ -596,35 +667,72 @@ class WhatsminerMiner extends BaseMiner {
     return processedStats
   }
 
+  _mapPool (pool) {
+    return {
+      index: pool.POOL,
+      url: pool.URL,
+      status: pool.Status,
+      priority: pool.Priority,
+      quota: pool.Quota,
+      getworks: pool.Getworks,
+      accepted: pool.Accepted,
+      rejected: pool.Rejected,
+      stale: pool.Stale,
+      works: pool.Works,
+      discarded: pool.Discarded,
+      get_failures: pool['Get Failures'],
+      remote_failures: pool['Remote Failures'],
+      user: pool.User,
+      last_share_time: pool['Last Share Time'],
+      stratum_active: pool['Stratum Active'],
+      stratum_difficulty: pool['Stratum Difficulty'],
+      pool_rejected: pool['Pool Rejected%'],
+      pool_stale: pool['Pool Stale%'],
+      bad_work: pool['Bad Work'],
+      current_block_height: pool['Current Block Height'],
+      current_block_version: pool['Current Block Version']
+    }
+  }
+
   async getPools () {
     const res = await this._requestReadEndpoint('pools')
+    let pools = res?.POOLS ? res.POOLS.map(pool => this._mapPool(pool)) : []
 
-    return res?.POOLS
-      ? res.POOLS.map(pool => ({
-        index: pool.POOL,
-        url: pool.URL,
-        status: pool.Status,
-        priority: pool.Priority,
-        quota: pool.Quota,
-        getworks: pool.Getworks,
-        accepted: pool.Accepted,
-        rejected: pool.Rejected,
-        stale: pool.Stale,
-        works: pool.Works,
-        discarded: pool.Discarded,
-        get_failures: pool['Get Failures'],
-        remote_failures: pool['Remote Failures'],
-        user: pool.User,
-        last_share_time: pool['Last Share Time'],
-        stratum_active: pool['Stratum Active'],
-        stratum_difficulty: pool['Stratum Difficulty'],
-        pool_rejected: pool['Pool Rejected%'],
-        pool_stale: pool['Pool Stale%'],
-        bad_work: pool['Bad Work'],
-        current_block_height: pool['Current Block Height'],
-        current_block_version: pool['Current Block Version']
-      }))
-      : []
+    if (pools.length && this._isV3()) {
+      pools = await this._supplementPoolShares(pools)
+    }
+
+    return pools
+  }
+
+  /**
+   * The v3 API does not report pool share counts (accepted/rejected/stale) —
+   * supplement them from the v2-compat `pools` command when available, so
+   * share tracking and pool alerts keep working on v3 firmware.
+   */
+  async _supplementPoolShares (pools) {
+    let compatPools = []
+    if (this.writeHandler) {
+      try {
+        const res = await this.writeHandler.requestRead('pools')
+        compatPools = res?.POOLS ? res.POOLS.map(pool => this._mapPool(pool)) : []
+      } catch (e) {
+        this.debugError('v2-compat pools supplement failed', e.message)
+      }
+    }
+
+    return pools.map((pool, i) => {
+      const compat = compatPools.find(c => c.url === pool.url) || compatPools[i] || {}
+      const merged = { ...pool }
+      for (const [key, value] of Object.entries(compat)) {
+        if (merged[key] === undefined) merged[key] = value
+      }
+      // JSON-safe defaults when neither API provided share counts
+      merged.accepted = merged.accepted ?? 0
+      merged.rejected = merged.rejected ?? 0
+      merged.stale = merged.stale ?? 0
+      return merged
+    })
   }
 
   async restartMinerSoftware () {
@@ -638,7 +746,7 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   async setPools (pools, appendId = true) {
-    //always use config pools
+    // always use config pools
     pools = this.conf.pools
 
     let oldPools = await this.getPools()
@@ -748,7 +856,7 @@ class WhatsminerMiner extends BaseMiner {
   async prePowerOn () {
     let res = await this._requestWriteEndpoint('pre_power_on').catch(e => this.debugError('pre_power_on_err', e))
     while (res?.Msg?.complete !== 'true') {
-      await new Promise(r => setTimeout(r), 200)
+      await new Promise(resolve => setTimeout(resolve, 200))
       res = await this._requestWriteEndpoint('pre_power_on').catch(e => this.debugError('pre_power_on_err', e))
     }
     return { success: isResOK(res) }
@@ -1074,6 +1182,7 @@ class WhatsminerMiner extends BaseMiner {
     this._handleErrorUpdates(data.errors)
 
     const isErrored = data.errors.length > 0
+    const upfreqSpeed = data.miner_info.upfreq_speed ?? data.miner_status?.upfreq_speed
 
     return {
       stats: {
@@ -1085,38 +1194,38 @@ class WhatsminerMiner extends BaseMiner {
         nominal_efficiency_w_ths: this.opts.nominalEfficiencyWThs || 0,
         pool_status: data.pools.map((pool) => ({
           pool: pool.url,
-          accepted: parseInt(pool.accepted),
-          rejected: parseInt(pool.rejected),
-          stale: parseInt(pool.stale)
+          accepted: parseInt(pool.accepted) || 0,
+          rejected: parseInt(pool.rejected) || 0,
+          stale: parseInt(pool.stale) || 0
         })),
         all_pools_shares: this._calcNewShares(data.pools),
         uptime_ms: parseFloat(data.stats.elapsed) * 1000,
         hashrate_mhs: this._calcHashrates(data.stats),
         frequency_mhz: {
-          avg: Math.floor(parseFloat(data.stats.freq_avg) * 100) / 100,
+          avg: round2(data.stats.freq_avg),
           target: parseFloat(data.stats.target_freq),
           chips: data.devices.map((device, index) => ({
             index,
-            current: Math.floor(parseFloat(device.chip_frequency) * 100) / 100
+            current: round2(device.chip_frequency)
           }))
         },
         temperature_c: {
-          ambient: Math.floor(parseFloat(data.stats.env_temp) * 100) / 100,
-          max: Math.floor(Math.max(...data.devices.map((device) => parseFloat(device.chip_temp_max))) * 100) / 100,
-          avg: this._calcAvgTemp(data.devices),
+          ambient: round2(data.stats.env_temp),
+          max: this._calcMaxChipTemp(data.devices, data.stats),
+          avg: this._calcAvgTemp(data.devices, data.stats),
           chips: data.devices.map((device, index) => ({
             index,
-            max: Math.floor(parseFloat(device.chip_temp_max) * 100) / 100,
-            min: Math.floor(parseFloat(device.chip_temp_min) * 100) / 100,
-            avg: Math.floor(parseFloat(device.chip_temp_avg) * 100) / 100
+            max: round2(device.chip_temp_max),
+            min: round2(device.chip_temp_min),
+            avg: round2(device.chip_temp_avg)
           })),
           pcb: data.devices.map((device, index) => ({
             index,
-            current: Math.floor(parseFloat(device.temperature) * 100) / 100
+            current: round2(device.temperature)
           }))
         },
         miner_specific: {
-          upfreq_speed: data.miner_info.upfreq_speed ? parseFloat(data.miner_info.upfreq_speed) : undefined,
+          upfreq_speed: upfreqSpeed !== undefined && upfreqSpeed !== '' ? parseFloat(upfreqSpeed) : undefined,
           fast_mining: data.miner_status?.fast_mining || false,
           fast_hash: data.miner_status?.fast_hash || false,
           hash_percent: data.miner_status?.hash_percent || '0',
@@ -1159,9 +1268,18 @@ class WhatsminerMiner extends BaseMiner {
     return Math.floor(parseFloat(stats.power) * 100) / 100
   }
 
-  _calcAvgTemp (devices) {
-    return Math.floor(devices.reduce((acc, device) =>
-      acc + parseFloat(device.chip_temp_avg), 0) / devices.length * 100) / 100
+  // Max chip temperature across boards; falls back to the summary-level
+  // value when per-board temps are unavailable (older v2-compat firmware)
+  _calcMaxChipTemp (devices, stats) {
+    const temps = devices.map((device) => parseFloat(device.chip_temp_max)).filter(Number.isFinite)
+    if (!temps.length) return round2(stats?.chip_temp_max)
+    return round2(Math.max(...temps))
+  }
+
+  _calcAvgTemp (devices, stats) {
+    const temps = devices.map((device) => parseFloat(device.chip_temp_avg)).filter(Number.isFinite)
+    if (!temps.length) return round2(stats?.chip_temp_avg)
+    return round2(temps.reduce((acc, t) => acc + t, 0) / temps.length)
   }
 
   _getPowerMode (stats) {
@@ -1175,12 +1293,12 @@ class WhatsminerMiner extends BaseMiner {
 
   _calcHashrates (stats) {
     return {
-      avg: Math.floor(parseFloat(stats.mhs_av) * 100) / 100,
-      target: Math.floor(parseFloat(stats.target_mhs) * 100) / 100,
-      t_5s: Math.floor(parseFloat(stats.mhs_5s) * 100) / 100,
-      t_1m: Math.floor(parseFloat(stats.mhs_1m) * 100) / 100,
-      t_5m: Math.floor(parseFloat(stats.mhs_5m) * 100) / 100,
-      t_15m: Math.floor(parseFloat(stats.mhs_15m) * 100) / 100
+      avg: round2(stats.mhs_av),
+      target: round2(stats.target_mhs),
+      t_5s: round2(stats.mhs_5s),
+      t_1m: round2(stats.mhs_1m),
+      t_5m: round2(stats.mhs_5m),
+      t_15m: round2(stats.mhs_15m)
     }
   }
 }

@@ -18,17 +18,23 @@ const API_DEFAULTS = {
   }
 }
 
-// Command mapping from v2 (underscore) to v3 (dot notation)
-// V3 uses get.miner.status with param for summary/pools/edevs
+// Command mapping from v2 (underscore) to v3 (dot notation), per the official
+// WhatsMiner API v3 documentation (apidoc.whatsminer.com).
+// Notes:
+// - There is NO get.version / get.miner.info / get.error.code / get.psu in v3;
+//   all device data comes from get.device.info (optionally filtered via param:
+//   miner | system | power | network | salt | error-code).
+// - summary/pools/edevs are params of get.miner.status. devdetails is
+//   deprecated and has no v3 equivalent.
 const COMMAND_MAP_V3 = {
-  // Authentication
+  // Authentication (salt for token generation)
   get_token: 'get.device.info',
 
-  // Read commands
-  get_version: 'get.version',
-  get_miner_info: 'get.miner.info',
-  get_error_code: 'get.error.code',
-  get_psu: 'get.psu',
+  // Read commands -> get.device.info sections
+  get_version: 'get.device.info',
+  get_miner_info: 'get.device.info',
+  get_error_code: 'get.device.info',
+  get_psu: 'get.device.info',
 
   // Status command
   status: 'get.miner.setting',
@@ -39,9 +45,13 @@ const COMMAND_MAP_V3 = {
   edevs: 'get.miner.status',
   devdetails: 'get.miner.status',
 
-  // Write commands - existing V2->V3 mappings
+  // Log download is a read command in v3 (no token required)
+  download_logs: 'get.log.download',
+
+  // Write commands (documented v3 names; currently write traffic is routed
+  // through the v2-compat API on port 4028 — see miner.js init())
   update_pools: 'set.miner.pools',
-  update_pwd: 'set.miner.passwd',
+  update_pwd: 'set.user.change_passwd',
   update_firmware: 'set.system.update_firmware',
   restart_btminer: 'set.miner.service',
   factory_reset: 'set.system.factory_reset',
@@ -60,66 +70,30 @@ const COMMAND_MAP_V3 = {
   set_low_power: 'set.miner.power_mode',
   set_normal_power: 'set.miner.power_mode',
   set_high_power: 'set.miner.power_mode',
+  set_power_pct: 'set.miner.power_percent',
   set_power_pct_v2: 'set.miner.power_percent',
   adjust_power_limit: 'set.miner.power_limit',
   adjust_upfreq_speed: 'set.miner.upfreq_speed',
   enable_btminer_fast_boot: 'set.miner.fastboot',
   disable_btminer_fast_boot: 'set.miner.fastboot',
-  enable_web_pools: 'set.miner.web_pools',
-  disable_web_pools: 'set.miner.web_pools',
-  net_config: 'set.network.config',
-  download_logs: 'get.log.download'
+  enable_web_pools: 'set.system.webpools',
+  disable_web_pools: 'set.system.webpools',
+  net_config: 'set.system.net_config'
 }
 
-// V3-only commands (no V2 equivalent)
-const V3_ONLY_COMMANDS = {
-  // Device
-  'get.device.info': true, // Auth command
-  'get.device.custom_data': true,
-  'set.device.custom_data': true,
-
-  // Fan
-  'get.fan.setting': true,
-  'set.fan.poweroff_cool': true,
-  'set.fan.temp_offset': true,
-  'set.fan.zero_speed': true,
-
-  // Log
-  'get.log.download': true,
-  'set.log.upload': true,
-
-  // Miner
-  'get.miner.status': true,
-  'get.miner.setting': true,
-  'get.miner.history': true,
-  'set.miner.cointype': true,
-  'set.miner.fast_hash': true,
-  'set.miner.fastboot': true,
-  'set.miner.heat_mode': true,
-  'set.miner.power': true,
-  'set.miner.power_limit': true,
-  'set.miner.power_mode': true,
-  'set.miner.power_percent': true,
-  'set.miner.pools': true,
-  'set.miner.report': true,
-  'set.miner.restore_setting': true,
-  'set.miner.service': true,
-
-  // System
-  'get.system.setting': true,
-  'set.system.factory_reset': true,
-  'set.system.hostname': true,
-  'set.system.led': true,
-  'set.system.reboot': true,
-  'set.system.timezone': true
-}
-
-// V3 param mapping for get.miner.status command
-const V3_STATUS_PARAMS = {
+// V3 `param` values for read commands, keyed by the original v2 command.
+// - get.miner.status REQUIRES a param (summary | pools | edevs, combinable
+//   with '+'). edevs is combined with summary so per-board PCB temperatures
+//   (summary.board-temperature) can be attached to each device.
+// - get.device.info accepts a section filter; commands without an entry here
+//   fetch the full (cached) device info.
+const V3_READ_PARAMS = {
   summary: 'summary',
   pools: 'pools',
-  edevs: 'edevs',
-  devdetails: 'devdetails'
+  edevs: 'edevs+summary',
+  get_token: 'salt',
+  get_error_code: 'error-code',
+  get_psu: 'power'
 }
 
 // Reverse mapping from v3 to v2 commands
@@ -135,11 +109,12 @@ const RESPONSE_CODES_V2 = {
   IP_LIMIT: 136
 }
 
-// V3 Response codes (per API 3.0.3 documentation)
+// V3 Response codes (per official API v3 documentation)
 const RESPONSE_CODES_V3 = {
   SUCCESS: 0,
   FAIL: -1,
   INVALID_COMMAND: -2,
+  PARAM_NULL: -3,
   NO_PERMISSION: -4
 }
 
@@ -152,8 +127,7 @@ module.exports = {
   API_DEFAULTS,
   COMMAND_MAP_V3,
   COMMAND_MAP_V2,
-  V3_ONLY_COMMANDS,
-  V3_STATUS_PARAMS,
+  V3_READ_PARAMS,
   RESPONSE_CODES,
   RESPONSE_CODES_V2,
   RESPONSE_CODES_V3

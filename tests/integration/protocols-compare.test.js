@@ -6,11 +6,14 @@ const TcpFacility = require('@tetherto/svc-facs-tcp')
 const srv = require('../../mock/server')
 
 const V2_PORT = 24028
-const V3_PORT = 24433
 const HOST = '127.0.0.1'
 const V2_PASSWORD = 'admin'
 const V3_PASSWORD = 'super'
 const SERIAL = 'TESTCOMPARE'
+
+// V3 firmware serves a v2-compat API on one port and the v3 API on another
+const V3C_V2_PORT = 24029
+const V3C_V3_PORT = 24433
 
 let mockServerV2
 let mockServerV3
@@ -18,7 +21,7 @@ let minerV2
 let minerV3
 
 test('Protocol Comparison - setup both servers', async (t) => {
-  // Create V2 mock server
+  // V2-only firmware: just the v2 port
   mockServerV2 = srv.createServer({
     host: HOST,
     port: V2_PORT,
@@ -28,17 +31,17 @@ test('Protocol Comparison - setup both servers', async (t) => {
     apiVersion: 'v2'
   })
 
-  // Create V3 mock server
+  // V3 firmware: v2-compat + framed v3 API
   mockServerV3 = srv.createServer({
     host: HOST,
-    port: V3_PORT,
+    port: V3C_V2_PORT,
+    v3Port: V3C_V3_PORT,
     type: 'M56s',
     serial: SERIAL + 'V3',
     password: V3_PASSWORD,
     apiVersion: 'v3'
   })
 
-  // Create V2 miner
   minerV2 = new Miner({
     timeout: 5000,
     socketer: {
@@ -52,7 +55,6 @@ test('Protocol Comparison - setup both servers', async (t) => {
     apiVersion: '2.0.5'
   })
 
-  // Create V3 miner
   minerV3 = new Miner({
     timeout: 5000,
     socketer: {
@@ -60,10 +62,11 @@ test('Protocol Comparison - setup both servers', async (t) => {
       rpc: (opts) => new TcpFacility().getRPC(opts)
     },
     address: HOST,
-    port: V3_PORT,
+    port: V3C_V2_PORT,
     password: V3_PASSWORD,
     id: 'compare-v3',
-    apiVersion: '3.0.3'
+    apiVersion: '3.0.3',
+    conf: { v3ApiPort: V3C_V3_PORT }
   })
 
   await minerV2.init()
@@ -71,6 +74,42 @@ test('Protocol Comparison - setup both servers', async (t) => {
 
   t.is(minerV2.apiVersion, '2.0.5', 'V2 miner should have correct version')
   t.is(minerV3.apiVersion, '3.0.3', 'V3 miner should have correct version')
+})
+
+test('Protocol Comparison - detection picks the right protocol per firmware', async (t) => {
+  // Auto-detect against the v2-only mock -> v2
+  const autoV2 = new Miner({
+    timeout: 3000,
+    socketer: {
+      readStrategy: TcpFacility.TCP_READ_STRATEGY.ON_END,
+      rpc: (opts) => new TcpFacility().getRPC(opts)
+    },
+    address: HOST,
+    port: V2_PORT,
+    password: V2_PASSWORD,
+    id: 'detect-v2',
+    conf: { v3ApiPort: 24998 } // nothing listens there, like real v2 firmware
+  })
+  await autoV2.init()
+  t.is(autoV2.apiVersion, '2.0.5', 'v2-only firmware should be detected as v2')
+  await autoV2.close()
+
+  // Auto-detect against the v3 mock (registered on the v2-compat port) -> v3
+  const autoV3 = new Miner({
+    timeout: 3000,
+    socketer: {
+      readStrategy: TcpFacility.TCP_READ_STRATEGY.ON_END,
+      rpc: (opts) => new TcpFacility().getRPC(opts)
+    },
+    address: HOST,
+    port: V3C_V2_PORT,
+    password: V3_PASSWORD,
+    id: 'detect-v3',
+    conf: { v3ApiPort: V3C_V3_PORT }
+  })
+  await autoV3.init()
+  t.is(autoV3.apiVersion, '3.0.3', 'v3 firmware should be detected as v3 even on the v2 port')
+  await autoV3.close()
 })
 
 test('Protocol Comparison - different default ports', (t) => {
@@ -89,7 +128,7 @@ test('Protocol Comparison - different auth commands', (t) => {
 test('Protocol Comparison - command transformation difference', (t) => {
   const testCommands = [
     { v2: 'get_token', v3: 'get.device.info' },
-    { v2: 'get_version', v3: 'get.version' },
+    { v2: 'get_version', v3: 'get.device.info' },
     { v2: 'update_pools', v3: 'set.miner.pools' },
     { v2: 'power_on', v3: 'set.miner.service' },
     { v2: 'set_led', v3: 'set.system.led' }
