@@ -557,9 +557,11 @@ class WhatsminerMiner extends BaseMiner {
     const processedStats = {
       elapsed: summary.Elapsed,
       mhs_av: summary['MHS av'],
-      mhs_5s: summary['MHS 5s'],
+      // v3 firmware's v2-compat API drops MHS 5s/5m and Target MHS from
+      // summary; fall back to the closest equivalents (no-ops on v2 firmware)
+      mhs_5s: summary['MHS 5s'] ?? summary['HS RT'],
       mhs_1m: summary['MHS 1m'],
-      mhs_5m: summary['MHS 5m'],
+      mhs_5m: summary['MHS 5m'] ?? summary['MHS 1m'],
       mhs_15m: summary['MHS 15m'],
       prev_mhs: this._cachedPrevHashrate,
       hs_rt: summary['HS RT'],
@@ -579,7 +581,7 @@ class WhatsminerMiner extends BaseMiner {
       hash_stable_cost_seconds: summary['Hash Stable Cost Seconds'],
       hash_deviation: summary['Hash Deviation%'],
       target_freq: summary['Target Freq'],
-      target_mhs: summary['Target MHS'],
+      target_mhs: summary['Target MHS'] ?? (summary['Factory GHS'] != null ? summary['Factory GHS'] * 1000 : undefined),
       env_temp: summary['Env Temp'],
       power_mode: summary['Power Mode'],
       factory_ghs: summary['Factory GHS'],
@@ -638,7 +640,7 @@ class WhatsminerMiner extends BaseMiner {
   }
 
   async setPools (pools, appendId = true) {
-    //always use config pools
+    // always use config pools
     pools = this.conf.pools
 
     let oldPools = await this.getPools()
@@ -936,7 +938,8 @@ class WhatsminerMiner extends BaseMiner {
     const res = await this._requestReadEndpoint('edevs')
 
     return res?.DEVS?.map(device => ({
-      index: device.ASC,
+      // v3 firmware's v2-compat edevs have no ASC field, only Slot
+      index: device.ASC ?? device.Slot,
       slot: device.Slot,
       enabled: device.Enabled,
       status: device.Status,
@@ -1102,8 +1105,8 @@ class WhatsminerMiner extends BaseMiner {
         },
         temperature_c: {
           ambient: Math.floor(parseFloat(data.stats.env_temp) * 100) / 100,
-          max: Math.floor(Math.max(...data.devices.map((device) => parseFloat(device.chip_temp_max))) * 100) / 100,
-          avg: this._calcAvgTemp(data.devices),
+          max: this._calcMaxChipTemp(data.devices, data.stats),
+          avg: this._calcAvgTemp(data.devices, data.stats),
           chips: data.devices.map((device, index) => ({
             index,
             max: Math.floor(parseFloat(device.chip_temp_max) * 100) / 100,
@@ -1159,9 +1162,21 @@ class WhatsminerMiner extends BaseMiner {
     return Math.floor(parseFloat(stats.power) * 100) / 100
   }
 
-  _calcAvgTemp (devices) {
-    return Math.floor(devices.reduce((acc, device) =>
-      acc + parseFloat(device.chip_temp_avg), 0) / devices.length * 100) / 100
+  _calcAvgTemp (devices, stats) {
+    const avg = devices.reduce((acc, device) =>
+      acc + parseFloat(device.chip_temp_avg), 0) / devices.length
+    if (Number.isFinite(avg)) return Math.floor(avg * 100) / 100
+    // v3 firmware's v2-compat edevs omit per-board chip temps; summary still
+    // reports the miner-level Chip Temp Avg/Max
+    const summaryAvg = parseFloat(stats?.chip_temp_avg)
+    return Number.isFinite(summaryAvg) ? Math.floor(summaryAvg * 100) / 100 : null
+  }
+
+  _calcMaxChipTemp (devices, stats) {
+    const max = Math.max(...devices.map((device) => parseFloat(device.chip_temp_max)))
+    if (Number.isFinite(max)) return Math.floor(max * 100) / 100
+    const summaryMax = parseFloat(stats?.chip_temp_max)
+    return Number.isFinite(summaryMax) ? Math.floor(summaryMax * 100) / 100 : null
   }
 
   _getPowerMode (stats) {
