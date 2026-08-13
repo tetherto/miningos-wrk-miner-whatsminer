@@ -238,8 +238,18 @@ test('rel3 v2-compat - snap has no null hashrate/temperature/frequency', async (
     ],
     'board temps from edevs Temperature'
   )
-  // Per-board chip temps are genuinely absent on this firmware — null, not 0
-  t.is(snap.stats.temperature_c.chips[0].max, null, 'per-board chip temp stays null')
+  // Per-board chip temps are absent on this firmware — the board sensor
+  // (Temperature) is the only per-board reading, so chips fall back to it
+  t.alike(
+    snap.stats.temperature_c.chips[0],
+    { index: 0, max: 65.31, min: 65.31, avg: 65.31 },
+    'chip temps fall back to the board sensor'
+  )
+  t.alike(
+    snap.stats.temperature_c.chips[2],
+    { index: 2, max: 54.81, min: 54.81, avg: 54.81 },
+    'each board uses its own sensor'
+  )
 
   t.is(snap.stats.frequency_mhz.avg, 419.21, 'freq avg from summary freq_avg')
   t.is(snap.stats.frequency_mhz.target, 0, 'a real 0 Target Freq stays 0')
@@ -284,6 +294,23 @@ test('classic v2 - summary fallbacks do not override native fields', async (t) =
   t.is(stats.mhs_5s, 111, 'MHS 5s used when present')
   t.is(stats.mhs_5m, 222, 'MHS 5m used when present')
   t.is(stats.target_mhs, 333, 'Target MHS used when present')
+})
+
+test('classic v2 - per-board chip temps take precedence over the board sensor', async (t) => {
+  const edevs = JSON.parse(JSON.stringify(REL3_RESPONSES.edevs))
+  edevs.DEVS.forEach((dev, i) => {
+    dev['Chip Temp Min'] = 50 + i
+    dev['Chip Temp Max'] = 90 + i
+    dev['Chip Temp Avg'] = 70 + i
+  })
+  const miner = buildMiner({ ...REL3_RESPONSES, edevs })
+  const snap = JSON.parse(JSON.stringify(await miner._prepSnap()))
+
+  t.alike(
+    snap.stats.temperature_c.chips[0],
+    { index: 0, max: 90, min: 50, avg: 70 },
+    'chip temps used when the firmware reports them'
+  )
 })
 
 test('classic v2 - per-device chip temps take precedence over summary', (t) => {

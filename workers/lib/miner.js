@@ -1109,9 +1109,11 @@ class WhatsminerMiner extends BaseMiner {
           avg: this._calcAvgTemp(data.devices, data.stats),
           chips: data.devices.map((device, index) => ({
             index,
-            max: Math.floor(parseFloat(device.chip_temp_max) * 100) / 100,
-            min: Math.floor(parseFloat(device.chip_temp_min) * 100) / 100,
-            avg: Math.floor(parseFloat(device.chip_temp_avg) * 100) / 100
+            // v3 firmware's v2-compat edevs drop per-board chip temps; the
+            // board sensor (Temperature) is the only per-board reading left
+            max: Math.floor(parseFloat(device.chip_temp_max ?? device.temperature) * 100) / 100,
+            min: Math.floor(parseFloat(device.chip_temp_min ?? device.temperature) * 100) / 100,
+            avg: Math.floor(parseFloat(device.chip_temp_avg ?? device.temperature) * 100) / 100
           })),
           pcb: data.devices.map((device, index) => ({
             index,
