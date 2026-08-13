@@ -934,10 +934,77 @@ class WhatsminerMiner extends BaseMiner {
     }
   }
 
+  /**
+   * v3 firmware's v2-compat edevs no longer include per-board chip temps,
+   * but the native v3 API (length-prefixed JSON frames on port 4433, reads
+   * unauthenticated) still reports the real values. Fetch just that one
+   * read so chip temps stay correct instead of approximated.
+   * @returns {Promise<Array|null>} v3 edevs entries or null if unavailable
+   */
+  async _getV3ChipTemps () {
+    const port = this.conf.v3ApiPort || 4433
+    const payload = Buffer.from(JSON.stringify({ cmd: 'get.miner.status', param: 'edevs' }))
+    const frame = Buffer.alloc(4 + payload.length)
+    frame.writeUInt32LE(payload.length, 0)
+    payload.copy(frame, 4)
+
+    const res = await new Promise((resolve, reject) => {
+      const socket = new net.Socket()
+      let buf = Buffer.alloc(0)
+      let settled = false
+      const settle = (err, val) => {
+        if (settled) return
+        settled = true
+        socket.destroy()
+        if (err) reject(err)
+        else resolve(val)
+      }
+      socket.setTimeout(this.opts.timeout || 5000, () => settle(new Error('ERR_V3_EDEVS_TIMEOUT')))
+      socket.on('error', (e) => settle(e))
+      socket.on('data', (data) => {
+        buf = buf.length ? Buffer.concat([buf, data]) : data
+        if (buf.length < 4) return
+        const len = buf.readUInt32LE(0)
+        if (len > 4 * 1024 * 1024) return settle(new Error('ERR_V3_EDEVS_RESPONSE_TOO_LARGE'))
+        if (buf.length >= 4 + len) {
+          try {
+            settle(null, JSON.parse(buf.subarray(4, 4 + len).toString()))
+          } catch (e) {
+            settle(e)
+          }
+        }
+      })
+      socket.connect(port, this.opts.address, () => socket.write(frame))
+    })
+
+    return res?.code === 0 && Array.isArray(res.msg?.edevs) ? res.msg.edevs : null
+  }
+
+  async _supplementChipTemps (devices) {
+    if (!devices.length || !devices.some(device => device.chip_temp_max === undefined)) {
+      return devices
+    }
+    try {
+      const v3Edevs = await this._getV3ChipTemps()
+      if (!v3Edevs) return devices
+      const bySlot = new Map(v3Edevs.map(dev => [dev.slot, dev]))
+      for (const device of devices) {
+        const v3 = bySlot.get(device.slot)
+        if (!v3) continue
+        device.chip_temp_min = device.chip_temp_min ?? v3['chip-temp-min']
+        device.chip_temp_max = device.chip_temp_max ?? v3['chip-temp-max']
+        device.chip_temp_avg = device.chip_temp_avg ?? v3['chip-temp-avg']
+      }
+    } catch (e) {
+      this.debugError('v3 chip temp supplement failed', e.message)
+    }
+    return devices
+  }
+
   async getDevices () {
     const res = await this._requestReadEndpoint('edevs')
 
-    return res?.DEVS?.map(device => ({
+    const devices = res?.DEVS?.map(device => ({
       // v3 firmware's v2-compat edevs have no ASC field, only Slot
       index: device.ASC ?? device.Slot,
       slot: device.Slot,
@@ -961,6 +1028,8 @@ class WhatsminerMiner extends BaseMiner {
       chip_temp_avg: device['Chip Temp Avg'],
       chip_vol_diff: device.chip_vol_diff
     })) || []
+
+    return this._supplementChipTemps(devices)
   }
 
   async getDevicesInfo () {
@@ -1109,11 +1178,9 @@ class WhatsminerMiner extends BaseMiner {
           avg: this._calcAvgTemp(data.devices, data.stats),
           chips: data.devices.map((device, index) => ({
             index,
-            // v3 firmware's v2-compat edevs drop per-board chip temps; the
-            // board sensor (Temperature) is the only per-board reading left
-            max: Math.floor(parseFloat(device.chip_temp_max ?? device.temperature) * 100) / 100,
-            min: Math.floor(parseFloat(device.chip_temp_min ?? device.temperature) * 100) / 100,
-            avg: Math.floor(parseFloat(device.chip_temp_avg ?? device.temperature) * 100) / 100
+            max: Math.floor(parseFloat(device.chip_temp_max) * 100) / 100,
+            min: Math.floor(parseFloat(device.chip_temp_min) * 100) / 100,
+            avg: Math.floor(parseFloat(device.chip_temp_avg) * 100) / 100
           })),
           pcb: data.devices.map((device, index) => ({
             index,

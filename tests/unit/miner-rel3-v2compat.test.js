@@ -194,7 +194,17 @@ const REL3_RESPONSES = {
   }
 }
 
-function buildMiner (responses) {
+// Captured from the same miner's native v3 API (port 4433):
+// get.miner.status param edevs — the real per-board chip temps the
+// v2-compat edevs no longer carry.
+const REL3_V3_EDEVS = [
+  { id: 0, slot: 0, 'hash-average': 170.39, 'factory-hash': 139.93, freq: 413.0592956542969, 'effective-chips': 288, 'chip-temp-min': 68, 'chip-temp-avg': 72, 'chip-temp-max': 77.8 },
+  { id: 1, slot: 1, 'hash-average': 175.626, 'factory-hash': 139.93, freq: 424.81365966796875, 'effective-chips': 288, 'chip-temp-min': 57.8, 'chip-temp-avg': 63, 'chip-temp-max': 68.6 },
+  { id: 2, slot: 2, 'hash-average': 175.483, 'factory-hash': 140.557, freq: 425.5421142578125, 'effective-chips': 288, 'chip-temp-min': 58.9, 'chip-temp-avg': 63, 'chip-temp-max': 68.6 },
+  { id: 3, slot: 3, 'hash-average': 170.442, 'factory-hash': 140.557, freq: 413.45306396484375, 'effective-chips': 288, 'chip-temp-min': 67.7, 'chip-temp-avg': 72, 'chip-temp-max': 78 }
+]
+
+function buildMiner (responses, v3Edevs) {
   const miner = Object.create(WhatsminerMiner.prototype)
   miner.opts = { id: 'test-rel3', address: '127.0.0.1', port: 4028, type: 'miner-wm-m7bs', password: 'pw' }
   miner.conf = {}
@@ -204,6 +214,12 @@ function buildMiner (responses) {
   miner.debugError = () => {}
   miner.updateLastSeen = () => {}
   miner._handleErrorUpdates = () => {}
+  miner.v3ChipTempCalls = 0
+  miner._getV3ChipTemps = async () => {
+    miner.v3ChipTempCalls++
+    if (!v3Edevs) throw new Error('ECONNREFUSED')
+    return v3Edevs
+  }
   miner.protocolHandler = new WMApiV2({
     rpc: { request: async (payload) => JSON.stringify(responses[JSON.parse(payload).cmd]) },
     password: 'pw',
@@ -213,7 +229,7 @@ function buildMiner (responses) {
 }
 
 test('rel3 v2-compat - snap has no null hashrate/temperature/frequency', async (t) => {
-  const miner = buildMiner(REL3_RESPONSES)
+  const miner = buildMiner(REL3_RESPONSES, REL3_V3_EDEVS)
   // Serialize like the worker does so NaN becomes null in assertions
   const snap = JSON.parse(JSON.stringify(await miner._prepSnap()))
 
@@ -225,8 +241,8 @@ test('rel3 v2-compat - snap has no null hashrate/temperature/frequency', async (
   t.is(snap.stats.hashrate_mhs.t_15m, 692005440, 't_15m from MHS 15m')
   t.is(snap.stats.hashrate_mhs.target, 560974000, 'target falls back to Factory GHS * 1000')
 
-  t.is(snap.stats.temperature_c.max, 77.7, 'max chip temp from summary Chip Temp Max')
-  t.is(snap.stats.temperature_c.avg, 67.5, 'avg chip temp from summary Chip Temp Avg')
+  t.is(snap.stats.temperature_c.max, 78, 'max chip temp from v3-supplemented boards')
+  t.is(snap.stats.temperature_c.avg, 67.5, 'avg chip temp from v3-supplemented boards')
   t.is(snap.stats.temperature_c.ambient, 45.56, 'ambient from Env Temp')
   t.alike(
     snap.stats.temperature_c.pcb,
@@ -238,18 +254,19 @@ test('rel3 v2-compat - snap has no null hashrate/temperature/frequency', async (
     ],
     'board temps from edevs Temperature'
   )
-  // Per-board chip temps are absent on this firmware — the board sensor
-  // (Temperature) is the only per-board reading, so chips fall back to it
+  // v2-compat edevs omit per-board chip temps — the real values come from
+  // the native v3 API supplement
   t.alike(
-    snap.stats.temperature_c.chips[0],
-    { index: 0, max: 65.31, min: 65.31, avg: 65.31 },
-    'chip temps fall back to the board sensor'
+    snap.stats.temperature_c.chips,
+    [
+      { index: 0, max: 77.8, min: 68, avg: 72 },
+      { index: 1, max: 68.59, min: 57.8, avg: 63 },
+      { index: 2, max: 68.59, min: 58.9, avg: 63 },
+      { index: 3, max: 78, min: 67.7, avg: 72 }
+    ],
+    'real chip temps from the v3 edevs supplement'
   )
-  t.alike(
-    snap.stats.temperature_c.chips[2],
-    { index: 2, max: 54.81, min: 54.81, avg: 54.81 },
-    'each board uses its own sensor'
-  )
+  t.is(miner.v3ChipTempCalls, 1, 'v3 supplement fetched once')
 
   t.is(snap.stats.frequency_mhz.avg, 419.21, 'freq avg from summary freq_avg')
   t.is(snap.stats.frequency_mhz.target, 0, 'a real 0 Target Freq stays 0')
@@ -296,20 +313,32 @@ test('classic v2 - summary fallbacks do not override native fields', async (t) =
   t.is(stats.target_mhs, 333, 'Target MHS used when present')
 })
 
-test('classic v2 - per-board chip temps take precedence over the board sensor', async (t) => {
+test('rel3 v2-compat - chip temps stay null when the v3 API is unreachable', async (t) => {
+  const miner = buildMiner(REL3_RESPONSES)
+  const snap = JSON.parse(JSON.stringify(await miner._prepSnap()))
+
+  t.is(miner.v3ChipTempCalls, 1, 'v3 supplement attempted')
+  // No approximation: missing chip temps stay null, not the board sensor
+  t.alike(snap.stats.temperature_c.chips[0], { index: 0, max: null, min: null, avg: null })
+  t.is(snap.stats.temperature_c.max, 77.7, 'miner-level max falls back to summary Chip Temp Max')
+  t.is(snap.stats.temperature_c.avg, 67.5, 'miner-level avg falls back to summary Chip Temp Avg')
+})
+
+test('classic v2 - v3 supplement is skipped when edevs already report chip temps', async (t) => {
   const edevs = JSON.parse(JSON.stringify(REL3_RESPONSES.edevs))
   edevs.DEVS.forEach((dev, i) => {
     dev['Chip Temp Min'] = 50 + i
     dev['Chip Temp Max'] = 90 + i
     dev['Chip Temp Avg'] = 70 + i
   })
-  const miner = buildMiner({ ...REL3_RESPONSES, edevs })
+  const miner = buildMiner({ ...REL3_RESPONSES, edevs }, REL3_V3_EDEVS)
   const snap = JSON.parse(JSON.stringify(await miner._prepSnap()))
 
+  t.is(miner.v3ChipTempCalls, 0, 'no v3 request when v2 data is complete')
   t.alike(
     snap.stats.temperature_c.chips[0],
     { index: 0, max: 90, min: 50, avg: 70 },
-    'chip temps used when the firmware reports them'
+    'chip temps from v2 edevs'
   )
 })
 
