@@ -127,7 +127,7 @@ class WMApiV3 extends WMApiBase {
           cmd: command,
           ts,
           token,
-          account: 'super',
+          account: this.username || 'super',
           ...params
         }
 

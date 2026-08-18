@@ -83,6 +83,7 @@ class WhatsminerMiner extends BaseMiner {
     this.protocolHandler = ApiHandlerFactory.create(this.apiVersion, {
       rpc: this.rpc,
       password: this.opts.password,
+      username: this.opts.username,
       debugError: this.debugError.bind(this)
     })
   }
