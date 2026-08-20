@@ -9,6 +9,7 @@ const path = require('path')
 const fs = require('fs/promises')
 
 const DEFAULT_PORT = 4028
+const MAC_ADDRESS_RX = /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/
 const { DEFAULT_NOMINAL_EFFICIENCY_WTHS } = require('./constants')
 const { ApiHandlerFactory } = require('./protocols')
 
@@ -63,6 +64,27 @@ class WrkMinerRack extends WrkRack {
 
   getSpecTags () {
     return ['miner']
+  }
+
+  _validateMacAddress (data) {
+    const mac = data.info?.macAddress
+    if (mac === undefined || mac === null || mac === '') return
+    if (typeof mac !== 'string' || !MAC_ADDRESS_RX.test(mac)) {
+      throw new Error('ERR_THING_MACADDRESS_INVALID')
+    }
+    if (parseInt(mac.slice(0, 2), 16) & 1) {
+      throw new Error('ERR_THING_MACADDRESS_MULTICAST')
+    }
+  }
+
+  _validateRegisterThing (data) {
+    super._validateRegisterThing(data)
+    this._validateMacAddress(data)
+  }
+
+  _validateUpdateThing (data) {
+    super._validateUpdateThing(data)
+    this._validateMacAddress(data)
   }
 
   getMinerDefaultPort () {
