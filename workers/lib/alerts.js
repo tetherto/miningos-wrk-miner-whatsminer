@@ -102,7 +102,7 @@ libAlerts.specs.miner = {
       const threshold = configuredParams.maxTempC
       return snap.stats.temperature_c?.pcb?.some((t) => t.current > threshold)
     }
-  },
+  }
 }
 
 module.exports = libAlerts
