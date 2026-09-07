@@ -142,4 +142,6 @@ libStats.specs = {
   }
 }
 
+libStats.groupByMinerInfo = groupByMinerInfo
+
 module.exports = libStats
