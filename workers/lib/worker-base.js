@@ -9,7 +9,7 @@ const path = require('path')
 const fs = require('fs/promises')
 
 const lWrkFunLogs = require('@tetherto/miningos-tpl-wrk-thing/workers/lib/wrk-fun-logs')
-const { groupByMinerInfo } = require('./stats')
+const { groupByMinerInfo } = require('./utils')
 
 const DEFAULT_PORT = 4028
 const { DAILY_STAT_KEY, DAILY_POSITION_KEY, DEFAULT_NOMINAL_EFFICIENCY_WTHS } = require('./constants')
