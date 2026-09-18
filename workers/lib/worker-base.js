@@ -72,7 +72,21 @@ class WrkMinerRack extends WrkRack {
     return super.buildStats(sk, fireTime)
   }
 
+  /**
+   * Point-in-time sample of every positioned miner, not an aggregate over the
+   * day: each cell is that miner's latest snap at the `stat-1D` cron instant,
+   * which runs on the process clock (UTC in every deployment), so a UTC-4 site
+   * is photographed at 20:00 local on the day a zone-aware consumer labels the
+   * row. Deliberate — the heatmap slider is per-day, so an hourly log would
+   * store 24x the data (562 KiB/day -> 13.8 MB/day at 1,243 miners) to render
+   * the same one snapshot per day. Re-time the sample here, not in the source
+   * granularity, if a site ever needs a different instant.
+   */
   async saveDailyPositionStats (time) {
+    // Guarded here rather than at the call site: this runs before the delegation
+    // to super, so it never reaches the template's own slave guard in buildStats.
+    if (this.ctx.slave) return
+
     const ts = Math.floor(time.getTime() / 1000) * 1000
     const row = {
       ts,
