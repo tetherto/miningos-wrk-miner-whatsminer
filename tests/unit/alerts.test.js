@@ -587,6 +587,118 @@ for (const key of ['custom.chip_temp.warning', 'custom.chip_temp.critical']) {
   })
 }
 
+for (const key of ['custom.low_hashrate.warning', 'custom.low_hashrate.critical']) {
+  test(`${key} alert - exists with valid and probe functions`, (t) => {
+    const spec = alerts.specs.miner[key]
+    t.ok(spec, 'should exist')
+    t.ok(typeof spec.valid === 'function', 'should have valid function')
+    t.ok(typeof spec.probe === 'function', 'should have probe function')
+  })
+
+  test(`${key} alert - valid and probe`, (t) => {
+    const spec = alerts.specs.miner[key]
+
+    withMiningMocks(() => {
+      const ctx = { id: key, configuredParams: { [key]: { enabled: true, lowHashrate: 80 } } }
+      const t0 = Date.now()
+      // 100% power => target 480 THs (480,000,000 MHS), threshold 384,000,000 MHS
+      const statsAt = (ts, overrides = {}) => ({
+        status: 'mining',
+        timestamp: ts,
+        miner_specific: { power_pct: 100 },
+        hashrate_mhs: { avg: 480_000_000 },
+        ...overrides
+      })
+
+      const justStarted = { stats: statsAt(t0) }
+      t.not(spec.valid(ctx, justStarted), 'not valid the moment hashrate first appears')
+
+      const stillEarly = { stats: statsAt(t0 + MIN_30_MS - 1) }
+      t.not(spec.valid(ctx, stillEarly), 'not valid before 30 min of mining')
+
+      const base = { stats: statsAt(t0 + MIN_30_MS + 1, { hashrate_mhs: { avg: 300_000_000 } }) }
+      t.ok(spec.valid(ctx, base), 'valid when enabled and mining > 30 min')
+      t.ok(spec.probe(ctx, base), 'triggers when hashrate below 80% of the 480 THs target')
+
+      const okHash = { stats: statsAt(t0 + MIN_30_MS + 1, { hashrate_mhs: { avg: 450_000_000 } }) }
+      t.not(spec.probe(ctx, okHash), 'does not trigger when hashrate above threshold')
+
+      // 50% power => target min(640, 480*0.5)=240 THs, threshold 192,000,000 MHS
+      const halfPower = { stats: statsAt(t0 + MIN_30_MS + 1, { miner_specific: { power_pct: 50 }, hashrate_mhs: { avg: 150_000_000 } }) }
+      t.ok(spec.probe(ctx, halfPower), 'target scales down linearly with power percentage')
+
+      // 200% power => target capped at 640 THs (threshold 512,000,000), not
+      // 960 THs (which would put the threshold at 768,000,000 and wrongly
+      // trigger for this avg)
+      const overdrive = { stats: statsAt(t0 + MIN_30_MS + 1, { miner_specific: { power_pct: 200 }, hashrate_mhs: { avg: 600_000_000 } }) }
+      t.not(spec.probe(ctx, overdrive), 'target is capped at 640 THs even above 133% power')
+
+      const disabled = { id: key, configuredParams: { [key]: { enabled: false, lowHashrate: 80 } } }
+      t.not(spec.valid(disabled, base), 'not valid when disabled')
+
+      const noConfiguredParams = { id: key, configuredParams: {} }
+      t.not(spec.valid(noConfiguredParams, base), 'not valid when configuredParams is missing')
+
+      const offline = { stats: statsAt(t0 + MIN_30_MS + 1, { status: 'offline' }) }
+      t.not(spec.valid(ctx, offline), 'not valid when offline')
+    })
+  })
+}
+
+for (const key of ['custom.high_power.warning', 'custom.high_power.critical']) {
+  test(`${key} alert - exists with valid and probe functions`, (t) => {
+    const spec = alerts.specs.miner[key]
+    t.ok(spec, 'should exist')
+    t.ok(typeof spec.valid === 'function', 'should have valid function')
+    t.ok(typeof spec.probe === 'function', 'should have probe function')
+  })
+
+  test(`${key} alert - valid and probe`, (t) => {
+    const spec = alerts.specs.miner[key]
+
+    withMiningMocks(() => {
+      const ctx = { id: key, configuredParams: { [key]: { enabled: true, highPower: 120 } } }
+      const t0 = Date.now()
+      // 100% power => target 7500 W, threshold 9000 W
+      const statsAt = (ts, overrides = {}) => ({
+        status: 'mining',
+        timestamp: ts,
+        miner_specific: { power_pct: 100 },
+        hashrate_mhs: { avg: 480_000_000 },
+        power_w: 7500,
+        ...overrides
+      })
+
+      const justStarted = { stats: statsAt(t0) }
+      t.not(spec.valid(ctx, justStarted), 'not valid the moment hashrate first appears')
+
+      const stillEarly = { stats: statsAt(t0 + MIN_10_MS - 1) }
+      t.not(spec.valid(ctx, stillEarly), 'not valid before 10 min of mining')
+
+      const base = { stats: statsAt(t0 + MIN_10_MS + 1, { power_w: 9500 }) }
+      t.ok(spec.valid(ctx, base), 'valid when enabled and mining > 10 min')
+      t.ok(spec.probe(ctx, base), 'triggers when power above 120% of the 7.5kW target')
+
+      const okPower = { stats: statsAt(t0 + MIN_10_MS + 1, { power_w: 8000 }) }
+      t.not(spec.probe(ctx, okPower), 'does not trigger when power within threshold')
+
+      // 200% power => target capped at 10kW (threshold 12kW), not 15kW (which
+      // would put the threshold at 18kW and wrongly miss this power draw)
+      const overdrive = { stats: statsAt(t0 + MIN_10_MS + 1, { miner_specific: { power_pct: 200 }, power_w: 13000 }) }
+      t.ok(spec.probe(ctx, overdrive), 'target is capped at 10kW even above 133% power')
+
+      const disabled = { id: key, configuredParams: { [key]: { enabled: false, highPower: 120 } } }
+      t.not(spec.valid(disabled, base), 'not valid when disabled')
+
+      const noConfiguredParams = { id: key, configuredParams: {} }
+      t.not(spec.valid(noConfiguredParams, base), 'not valid when configuredParams is missing')
+
+      const offline = { stats: statsAt(t0 + MIN_10_MS + 1, { status: 'offline' }) }
+      t.not(spec.valid(ctx, offline), 'not valid when offline')
+    })
+  })
+}
+
 for (const key of ['custom.low_power.warning', 'custom.low_power.critical']) {
   test(`${key} alert - exists with valid and probe functions`, (t) => {
     const spec = alerts.specs.miner[key]
@@ -601,13 +713,13 @@ for (const key of ['custom.low_power.warning', 'custom.low_power.critical']) {
     withMiningMocks(() => {
       const ctx = { id: key, configuredParams: { [key]: { enabled: true, lowPower: 80 } } }
       const t0 = Date.now()
-      // nominal 20 W/THs * 100 THs (100,000,000 MHS) target => 2000 W target, threshold 1600 W
+      // 100% power => target 7500 W, threshold 6000 W
       const statsAt = (ts, overrides = {}) => ({
         status: 'mining',
         timestamp: ts,
-        nominal_efficiency_w_ths: 20,
-        hashrate_mhs: { target: 100_000_000, avg: 100_000_000 },
-        power_w: 1500,
+        miner_specific: { power_pct: 100 },
+        hashrate_mhs: { avg: 480_000_000 },
+        power_w: 7500,
         ...overrides
       })
 
@@ -617,21 +729,27 @@ for (const key of ['custom.low_power.warning', 'custom.low_power.critical']) {
       const stillEarly = { stats: statsAt(t0 + MIN_10_MS - 1) }
       t.not(spec.valid(ctx, stillEarly), 'not valid before 10 min of mining')
 
-      const base = { stats: statsAt(t0 + MIN_10_MS + 1) }
-      t.ok(spec.valid(ctx, base), 'valid when enabled, mining > 10 min with a derivable target power')
-      t.ok(spec.probe(ctx, base), 'triggers when power below 80% of target')
+      const base = { stats: statsAt(t0 + MIN_10_MS + 1, { power_w: 5000 }) }
+      t.ok(spec.valid(ctx, base), 'valid when enabled and mining > 10 min')
+      t.ok(spec.probe(ctx, base), 'triggers when power below 80% of the 7.5kW target')
 
-      const okPower = { stats: statsAt(t0 + MIN_10_MS + 1, { power_w: 1800 }) }
+      const okPower = { stats: statsAt(t0 + MIN_10_MS + 1, { power_w: 6500 }) }
       t.not(spec.probe(ctx, okPower), 'does not trigger when power above threshold')
+
+      // 50% power => target min(10000, 7500*0.5)=3750 W, threshold 3000 W
+      const halfPower = { stats: statsAt(t0 + MIN_10_MS + 1, { miner_specific: { power_pct: 50 }, power_w: 2000 }) }
+      t.ok(spec.probe(ctx, halfPower), 'target scales down linearly with power percentage')
+
+      // 200% power => target capped at 10kW (threshold 8kW), not 15kW
+      // (which would put the threshold at 12kW and wrongly trigger for this power draw)
+      const overdrive = { stats: statsAt(t0 + MIN_10_MS + 1, { miner_specific: { power_pct: 200 }, power_w: 9000 }) }
+      t.not(spec.probe(ctx, overdrive), 'target is capped at 10kW even above 133% power')
 
       const disabled = { id: key, configuredParams: { [key]: { enabled: false, lowPower: 80 } } }
       t.not(spec.valid(disabled, base), 'not valid when disabled')
 
       const noConfiguredParams = { id: key, configuredParams: {} }
       t.not(spec.valid(noConfiguredParams, base), 'not valid when configuredParams is missing')
-
-      const noTarget = { stats: statsAt(t0 + MIN_10_MS + 1, { nominal_efficiency_w_ths: 0 }) }
-      t.not(spec.valid(ctx, noTarget), 'not valid without a derivable target power')
 
       const offline = { stats: statsAt(t0 + MIN_10_MS + 1, { status: 'offline' }) }
       t.not(spec.valid(ctx, offline), 'not valid when offline')

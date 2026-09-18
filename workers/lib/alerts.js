@@ -15,6 +15,24 @@ const targetPowerW = (snap) => {
   return nominalEff * (targetMhs / 1e6)
 }
 
+// Fleet-wide targets for the deployed model at 100% power (normal mode):
+// custom.low_hashrate.*/custom.high_power.* scale these
+// linearly with the miner's power percentage, capped at the hardware max
+const TARGET_CONSUMPTION_W_AT_100PCT = 7500
+const TARGET_HASHRATE_MHS_AT_100PCT = 480_000_000
+const MAX_CONSUMPTION_W = 10000
+const MAX_HASHRATE_MHS = 640_000_000
+
+const powerPct = (snap) => snap.stats.miner_specific?.power_pct ?? 100
+
+const targetConsumptionW = (snap) => {
+  return Math.min(MAX_CONSUMPTION_W, TARGET_CONSUMPTION_W_AT_100PCT * (powerPct(snap) / 100))
+}
+
+const targetHashrateMhs = (snap) => {
+  return Math.min(MAX_HASHRATE_MHS, TARGET_HASHRATE_MHS_AT_100PCT * (powerPct(snap) / 100))
+}
+
 // Shared with custom.low_hashrate.* (defined in the base template), so the
 // warm-up clock is tracked once, not per vendor.
 const timeSinceMiningMs = libAlerts.timeSinceMiningMs
@@ -144,18 +162,48 @@ libAlerts.specs.miner = {
       return a || false
     }
   },
+  // Overrides the flat MH/s threshold inherited from miner_default: the
+  // deployed model's real-world targets don't match a generic per-model
+  // efficiency table, so this compares against targetHashrateMhs instead.
+  'custom.low_hashrate.warning': {
+    valid: (ctx, snap) => {
+      const configuredParams = ctx.configuredParams['custom.low_hashrate.warning']
+      const enabled = configuredParams?.enabled
+      const miningMs = timeSinceMiningMs(ctx, snap)
+
+      return enabled && isMining(snap) && miningMs > MIN_30_MS
+    },
+    probe: (ctx, snap) => {
+      const configuredParams = ctx.configuredParams['custom.low_hashrate.warning']
+      const threshold = targetHashrateMhs(snap) * (configuredParams.lowHashrate / 100)
+      return snap.stats.hashrate_mhs.avg < threshold
+    }
+  },
+  'custom.low_hashrate.critical': {
+    valid: (ctx, snap) => {
+      const configuredParams = ctx.configuredParams['custom.low_hashrate.critical']
+      const enabled = configuredParams?.enabled
+      const miningMs = timeSinceMiningMs(ctx, snap)
+
+      return enabled && isMining(snap) && miningMs > MIN_30_MS
+    },
+    probe: (ctx, snap) => {
+      const configuredParams = ctx.configuredParams['custom.low_hashrate.critical']
+      const threshold = targetHashrateMhs(snap) * (configuredParams.lowHashrate / 100)
+      return snap.stats.hashrate_mhs.avg < threshold
+    }
+  },
   'custom.low_power.warning': {
     valid: (ctx, snap) => {
       const configuredParams = ctx.configuredParams['custom.low_power.warning']
       const enabled = configuredParams?.enabled
       const miningMs = timeSinceMiningMs(ctx, snap)
 
-      return enabled && isMining(snap) &&
-        miningMs > MIN_10_MS && targetPowerW(snap) > 0
+      return enabled && isMining(snap) && miningMs > MIN_10_MS
     },
     probe: (ctx, snap) => {
       const configuredParams = ctx.configuredParams['custom.low_power.warning']
-      const threshold = targetPowerW(snap) * (configuredParams.lowPower / 100)
+      const threshold = targetConsumptionW(snap) * (configuredParams.lowPower / 100)
       return snap.stats.power_w < threshold
     }
   },
@@ -165,13 +213,40 @@ libAlerts.specs.miner = {
       const enabled = configuredParams?.enabled
       const miningMs = timeSinceMiningMs(ctx, snap)
 
-      return enabled && isMining(snap) &&
-        miningMs > MIN_10_MS && targetPowerW(snap) > 0
+      return enabled && isMining(snap) && miningMs > MIN_10_MS
     },
     probe: (ctx, snap) => {
       const configuredParams = ctx.configuredParams['custom.low_power.critical']
-      const threshold = targetPowerW(snap) * (configuredParams.lowPower / 100)
+      const threshold = targetConsumptionW(snap) * (configuredParams.lowPower / 100)
       return snap.stats.power_w < threshold
+    }
+  },
+  'custom.high_power.warning': {
+    valid: (ctx, snap) => {
+      const configuredParams = ctx.configuredParams['custom.high_power.warning']
+      const enabled = configuredParams?.enabled
+      const miningMs = timeSinceMiningMs(ctx, snap)
+
+      return enabled && isMining(snap) && miningMs > MIN_10_MS
+    },
+    probe: (ctx, snap) => {
+      const configuredParams = ctx.configuredParams['custom.high_power.warning']
+      const threshold = targetConsumptionW(snap) * (configuredParams.highPower / 100)
+      return snap.stats.power_w > threshold
+    }
+  },
+  'custom.high_power.critical': {
+    valid: (ctx, snap) => {
+      const configuredParams = ctx.configuredParams['custom.high_power.critical']
+      const enabled = configuredParams?.enabled
+      const miningMs = timeSinceMiningMs(ctx, snap)
+
+      return enabled && isMining(snap) && miningMs > MIN_10_MS
+    },
+    probe: (ctx, snap) => {
+      const configuredParams = ctx.configuredParams['custom.high_power.critical']
+      const threshold = targetConsumptionW(snap) * (configuredParams.highPower / 100)
+      return snap.stats.power_w > threshold
     }
   },
   'custom.high_efficiency.warning': {
