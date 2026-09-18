@@ -47,6 +47,12 @@ test('daily position stats: only the daily stat build writes the log', async (t)
   t.is(saved.length, 1, 'written on the daily build')
 })
 
+test('daily position stats: a replica rack never writes the log', async (t) => {
+  saved.length = 0
+  await rack({ ctx: { slave: true } }).buildStats('stat-1D', new Date())
+  t.is(saved.length, 0, 'slave skips the write the template guards for the stat build')
+})
+
 test('daily position stats: a failed write never blocks the normal stat build', async (t) => {
   const c = rack({ saveDailyPositionStats: async () => { throw new Error('ERR_BOOM') }, debugError: () => {} })
   let built = false
