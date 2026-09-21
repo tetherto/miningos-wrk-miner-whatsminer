@@ -19,7 +19,7 @@ const DEFAULT_NOMINAL_EFFICIENCY_WTHS = {
   'miner-wm-m53s': 26,
   'miner-wm-m56s': 26,
   'miner-wm-m63': 26,
-  'miner-wm-m63spp': 26
+  'miner-wm-m63spp': 15.7
 }
 
 const MINER_COOLING_TYPE_MAP = {

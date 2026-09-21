@@ -1952,6 +1952,14 @@
         "description": "Miner power too low",
         "severity": "critical"
       },
+      "custom.high_power.warning": {
+        "description": "Miner power too high",
+        "severity": "warning"
+      },
+      "custom.high_power.critical": {
+        "description": "Miner power too high",
+        "severity": "critical"
+      },
       "custom.high_efficiency.warning": {
         "description": "Miner efficiency is too high",
         "severity": "warning"
