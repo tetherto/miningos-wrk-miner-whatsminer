@@ -73,6 +73,8 @@ class WrkMinerRack extends WrkRack {
   }
 
   async saveDailyPositionStats (time) {
+    if (this.ctx.slave) return
+
     const ts = Math.floor(time.getTime() / 1000) * 1000
     const row = {
       ts,
