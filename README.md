@@ -1,6 +1,6 @@
 # miningos-wrk-miner-whatsminer
 
-A worker service for managing and monitoring Whatsminer Bitcoin mining devices. This implementation provides comprehensive control over Whatsminer miners, including the models m30sp, m30spp, m53s, m56s, and, m63, with support for monitoring, configuration, and remote management.
+A worker service for managing and monitoring Whatsminer Bitcoin mining devices. This implementation provides comprehensive control over Whatsminer miners, including the models m30sp, m30spp, m53s, m56s, m63, and m63spp, with support for monitoring, configuration, and remote management.
 
 ## Table of Contents
 
@@ -161,7 +161,8 @@ Check out [miningos-tpl-wrk-miner](https://github.com/tetherto/miningos-tpl-wrk-
         "miner-wm-m30spp": 0,
         "miner-wm-m53s": 0,
         "miner-wm-m56s": 0,
-        "miner-wm-m63": 0
+        "miner-wm-m63": 0,
+        "miner-wm-m63spp": 0
       }
     }
   }
@@ -171,6 +172,7 @@ Check out [miningos-tpl-wrk-miner](https://github.com/tetherto/miningos-tpl-wrk-
 **Note**: The `nominalEfficiencyWThs` values in the example configuration are set to 0. The worker uses default values from code if not overridden:
 - M30SP/M30SPP: 33 W/TH/s (default)
 - M53S/M56S/M63: 26 W/TH/s (default)
+- M63SPP: 15.7 W/TH/s (default)
 
 **`containerSubnets`** (optional): maps `info.container` values to subnet CIDRs (e.g. `"group-1": "10.182.0.0/24"`). When set, the miner template resolves a miner's `info.subnet` from its container on register/update, so moving a miner to another container reassigns its IP in the mapped subnet. Containers missing from the mapping keep their existing subnet.
 
