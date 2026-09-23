@@ -72,6 +72,7 @@ class WrkMinerRack extends WrkRack {
     return super.buildStats(sk, fireTime)
   }
 
+  // Point-in-time sample at the stat-1D tick (00:00 UTC, 20:00 site-local), one row per day, not a 24h aggregate
   async saveDailyPositionStats (time) {
     if (this.ctx.slave) return
 
