@@ -176,7 +176,7 @@ libAlerts.specs.miner = {
     probe: (ctx, snap) => {
       const configuredParams = ctx.configuredParams['custom.low_hashrate.warning']
       const threshold = targetHashrateMhs(snap) * (configuredParams.lowHashrate / 100)
-      return snap.stats.hashrate_mhs.avg < threshold
+      return snap.stats.hashrate_mhs.t_5m < threshold
     }
   },
   'custom.low_hashrate.critical': {
@@ -190,7 +190,7 @@ libAlerts.specs.miner = {
     probe: (ctx, snap) => {
       const configuredParams = ctx.configuredParams['custom.low_hashrate.critical']
       const threshold = targetHashrateMhs(snap) * (configuredParams.lowHashrate / 100)
-      return snap.stats.hashrate_mhs.avg < threshold
+      return snap.stats.hashrate_mhs.t_5m < threshold
     }
   },
   'custom.low_power.warning': {

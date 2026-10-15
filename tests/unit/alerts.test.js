@@ -606,41 +606,44 @@ for (const key of ['custom.low_hashrate.warning', 'custom.low_hashrate.critical'
         status: 'mining',
         timestamp: ts,
         miner_specific: { power_pct: 100 },
-        hashrate_mhs: { avg: 480_000_000 },
+        hashrate_mhs: { avg: 480_000_000, t_5m: 480_000_000 },
         ...overrides
       })
 
       const justStarted = { stats: statsAt(t0) }
-      t.not(spec.valid(ctx, justStarted), 'not valid the moment hashrate first appears')
+      t.absent(spec.valid(ctx, justStarted), 'not valid the moment hashrate first appears')
 
       const stillEarly = { stats: statsAt(t0 + MIN_30_MS - 1) }
-      t.not(spec.valid(ctx, stillEarly), 'not valid before 30 min of mining')
+      t.absent(spec.valid(ctx, stillEarly), 'not valid before 30 min of mining')
 
-      const base = { stats: statsAt(t0 + MIN_30_MS + 1, { hashrate_mhs: { avg: 300_000_000 } }) }
+      // The probe compares t_5m; avg only drives the warm-up clock. Each case
+      // below sets avg on the opposite side of the threshold so the assertion
+      // fails if the probe reads avg instead of t_5m.
+      const base = { stats: statsAt(t0 + MIN_30_MS + 1, { hashrate_mhs: { avg: 480_000_000, t_5m: 300_000_000 } }) }
       t.ok(spec.valid(ctx, base), 'valid when enabled and mining > 30 min')
-      t.ok(spec.probe(ctx, base), 'triggers when hashrate below 80% of the 480 THs target')
+      t.ok(spec.probe(ctx, base), 'triggers when 5m hashrate below 80% of the 480 THs target')
 
-      const okHash = { stats: statsAt(t0 + MIN_30_MS + 1, { hashrate_mhs: { avg: 450_000_000 } }) }
-      t.not(spec.probe(ctx, okHash), 'does not trigger when hashrate above threshold')
+      const okHash = { stats: statsAt(t0 + MIN_30_MS + 1, { hashrate_mhs: { avg: 300_000_000, t_5m: 450_000_000 } }) }
+      t.absent(spec.probe(ctx, okHash), 'does not trigger when 5m hashrate above threshold')
 
       // 50% power => target min(640, 480*0.5)=240 THs, threshold 192,000,000 MHS
-      const halfPower = { stats: statsAt(t0 + MIN_30_MS + 1, { miner_specific: { power_pct: 50 }, hashrate_mhs: { avg: 150_000_000 } }) }
+      const halfPower = { stats: statsAt(t0 + MIN_30_MS + 1, { miner_specific: { power_pct: 50 }, hashrate_mhs: { avg: 480_000_000, t_5m: 150_000_000 } }) }
       t.ok(spec.probe(ctx, halfPower), 'target scales down linearly with power percentage')
 
       // 200% power => target capped at 640 THs (threshold 512,000,000), not
       // 960 THs (which would put the threshold at 768,000,000 and wrongly
-      // trigger for this avg)
-      const overdrive = { stats: statsAt(t0 + MIN_30_MS + 1, { miner_specific: { power_pct: 200 }, hashrate_mhs: { avg: 600_000_000 } }) }
-      t.not(spec.probe(ctx, overdrive), 'target is capped at 640 THs even above 133% power')
+      // trigger for this t_5m)
+      const overdrive = { stats: statsAt(t0 + MIN_30_MS + 1, { miner_specific: { power_pct: 200 }, hashrate_mhs: { avg: 300_000_000, t_5m: 600_000_000 } }) }
+      t.absent(spec.probe(ctx, overdrive), 'target is capped at 640 THs even above 133% power')
 
       const disabled = { id: key, configuredParams: { [key]: { enabled: false, lowHashrate: 80 } } }
-      t.not(spec.valid(disabled, base), 'not valid when disabled')
+      t.absent(spec.valid(disabled, base), 'not valid when disabled')
 
       const noConfiguredParams = { id: key, configuredParams: {} }
-      t.not(spec.valid(noConfiguredParams, base), 'not valid when configuredParams is missing')
+      t.absent(spec.valid(noConfiguredParams, base), 'not valid when configuredParams is missing')
 
       const offline = { stats: statsAt(t0 + MIN_30_MS + 1, { status: 'offline' }) }
-      t.not(spec.valid(ctx, offline), 'not valid when offline')
+      t.absent(spec.valid(ctx, offline), 'not valid when offline')
     })
   })
 }
